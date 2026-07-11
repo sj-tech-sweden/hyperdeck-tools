@@ -1,0 +1,7 @@
+destinations:
+- /Users/samueljorblad/Downloads
+filename_template: '{year}-{month}-{day}/{planned_title}_{deck_name}_Slot{slot_id}{ext}'
+hyperdecks:
+  HyperDeck_Left: 192.168.1.50
+schedule_file: schedule.json
+schedule_max_drift_minutes: 45

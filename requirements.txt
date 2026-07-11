@@ -1,0 +1,8 @@
+pyyaml
+uvicorn
+fastapi
+psutil
+requests
+beautifulsoup4
+openpyxl
+python-multipart
