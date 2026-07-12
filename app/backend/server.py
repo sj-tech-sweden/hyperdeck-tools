@@ -474,6 +474,123 @@ async def get_deck_states():
         }
     return fallback_state
 
+
+# --- HyperDeck Transport & Configuration Control Routes ---
+
+async def _load_all_deck_hosts() -> dict[str, str]:
+    """Return the name→host mapping from the persisted config."""
+    config = await get_config()
+    hyperdecks = config.get("hyperdecks", {}) if isinstance(config, dict) else {}
+    return {str(name): str(host) for name, host in hyperdecks.items()}
+
+
+# NOTE: Routes with literal path segments ("all") must be registered BEFORE
+# parameterised routes ({host}) so FastAPI does not absorb "all" as a host value.
+
+@app.post("/api/control/all/record")
+async def all_decks_record():
+    """Send a *record* command to every configured HyperDeck concurrently."""
+    from app.backend.hyperdeck_control import send_hyperdeck_command, parse_hyperdeck_response
+    decks = await _load_all_deck_hosts()
+    if not decks:
+        raise HTTPException(status_code=400, detail="No HyperDecks configured.")
+
+    async def _record_one(name: str, host: str) -> dict:
+        try:
+            response = await send_hyperdeck_command(host, "record")
+            parsed = parse_hyperdeck_response(response)
+            success = parsed.get("_code") in (200, 100)
+            return {"name": name, "host": host, "success": success, "response": response}
+        except HTTPException as exc:
+            return {"name": name, "host": host, "success": False, "response": exc.detail}
+
+    results = await asyncio.gather(*(_record_one(n, h) for n, h in decks.items()))
+    return {"status": "ok", "results": list(results)}
+
+
+@app.post("/api/control/all/stop")
+async def all_decks_stop():
+    """Send a *stop* command to every configured HyperDeck concurrently."""
+    from app.backend.hyperdeck_control import send_hyperdeck_command, parse_hyperdeck_response
+    decks = await _load_all_deck_hosts()
+    if not decks:
+        raise HTTPException(status_code=400, detail="No HyperDecks configured.")
+
+    async def _stop_one(name: str, host: str) -> dict:
+        try:
+            response = await send_hyperdeck_command(host, "stop")
+            parsed = parse_hyperdeck_response(response)
+            success = parsed.get("_code") in (200, 100)
+            return {"name": name, "host": host, "success": success, "response": response}
+        except HTTPException as exc:
+            return {"name": name, "host": host, "success": False, "response": exc.detail}
+
+    results = await asyncio.gather(*(_stop_one(n, h) for n, h in decks.items()))
+    return {"status": "ok", "results": list(results)}
+
+
+@app.post("/api/control/{host}/record")
+async def deck_record(host: str):
+    """Send a *record* command to a single HyperDeck."""
+    from app.backend.hyperdeck_control import send_hyperdeck_command, parse_hyperdeck_response
+    response = await send_hyperdeck_command(host, "record")
+    parsed = parse_hyperdeck_response(response)
+    if parsed.get("_code") not in (200, 100):
+        raise HTTPException(status_code=502, detail=f"HyperDeck rejected command: {response}")
+    return {"status": "ok", "host": host, "response": response}
+
+
+@app.post("/api/control/{host}/stop")
+async def deck_stop(host: str):
+    """Send a *stop* command to a single HyperDeck."""
+    from app.backend.hyperdeck_control import send_hyperdeck_command, parse_hyperdeck_response
+    response = await send_hyperdeck_command(host, "stop")
+    parsed = parse_hyperdeck_response(response)
+    if parsed.get("_code") not in (200, 100):
+        raise HTTPException(status_code=502, detail=f"HyperDeck rejected command: {response}")
+    return {"status": "ok", "host": host, "response": response}
+
+
+@app.get("/api/control/{host}/configuration")
+async def get_deck_configuration(host: str):
+    """Retrieve the current configuration from a single HyperDeck."""
+    from app.backend.hyperdeck_control import send_hyperdeck_command, parse_hyperdeck_response
+    response = await send_hyperdeck_command(host, "configuration")
+    parsed = parse_hyperdeck_response(response)
+    if parsed.get("_code") not in (200, 100):
+        raise HTTPException(status_code=502, detail=f"HyperDeck error: {response}")
+    # Strip internal meta-keys before returning
+    settings = {k: v for k, v in parsed.items() if not k.startswith("_")}
+    return {"host": host, "settings": settings}
+
+
+@app.post("/api/control/{host}/configuration")
+async def set_deck_configuration(host: str, settings: dict):
+    """
+    Apply one or more configuration settings to a single HyperDeck.
+    Each key-value pair in *settings* becomes a separate configuration command.
+    Returns per-command success/failure information.
+    """
+    from app.backend.hyperdeck_control import (
+        send_hyperdeck_command,
+        parse_hyperdeck_response,
+        build_configuration_command,
+    )
+    commands = build_configuration_command(settings)
+    if not commands:
+        raise HTTPException(status_code=400, detail="No valid configuration keys provided.")
+
+    results = []
+    for cmd in commands:
+        response = await send_hyperdeck_command(host, cmd)
+        parsed = parse_hyperdeck_response(response)
+        success = parsed.get("_code") in (200, 100)
+        results.append({"command": cmd, "success": success, "response": response})
+
+    overall = all(r["success"] for r in results)
+    return {"host": host, "status": "ok" if overall else "partial", "results": results}
+
+
 @app.get("/api/browse")
 async def browse_host_folders(path: str = ""):
     target_path = os.path.abspath(os.path.expanduser(path)) if path else os.path.expanduser("~")
