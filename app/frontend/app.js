@@ -376,8 +376,8 @@ async function updateDashboardMetrics() {
                         class="flex-1 rounded bg-slate-700 hover:bg-slate-600 px-2 py-1.5 text-xs font-semibold text-white transition cursor-pointer">
                         ⏹ Stop
                     </button>
-                    <button onclick="openDeckSettings(${jsIpAttr}, ${jsNameAttr})"
-                        class="rounded bg-slate-800 hover:bg-slate-700 px-2 py-1.5 text-xs text-slate-300 hover:text-white transition cursor-pointer" title="Deck settings">
+                    <button type="button" onclick="openDeckSettings(${jsIpAttr}, ${jsNameAttr})"
+                        class="rounded bg-slate-800 hover:bg-slate-700 px-2 py-1.5 text-xs text-slate-300 hover:text-white transition cursor-pointer" aria-label="Deck settings">
                         ⚙
                     </button>
                 </div>
@@ -1055,7 +1055,8 @@ async function sendDeckCommand(host, command) {
     const label = command === 'record' ? '⏺ Recording' : '⏹ Stopped';
     try {
         const res = await fetch(`/api/control/${encodeURIComponent(host)}/${command}`, { method: 'POST' });
-        const data = await res.json();
+        let data;
+        try { data = await res.json(); } catch (_) { data = {}; }
         if (!res.ok) {
             alert(`Command failed on ${host}: ${data.detail || 'Unknown error'}`);
         } else {
@@ -1080,7 +1081,8 @@ async function sendCommandToAll(command) {
     }
     try {
         const res = await fetch(`/api/control/all/${command}`, { method: 'POST' });
-        const data = await res.json();
+        let data;
+        try { data = await res.json(); } catch (_) { data = {}; }
         if (!res.ok) {
             alert(`${label} failed: ${data.detail || 'Unknown error'}`);
             return;
@@ -1104,11 +1106,9 @@ async function sendCommandToAll(command) {
 // --- Deck Settings Modal ---
 
 let activeDeckSettingsHost = '';
-let activeDeckSettingsName = '';
 
 async function openDeckSettings(host, name) {
     activeDeckSettingsHost = host;
-    activeDeckSettingsName = name;
     const modal = document.getElementById('deck-settings-modal');
     const hostLabel = document.getElementById('deck-settings-host');
     const loadingEl = document.getElementById('deck-settings-loading');
@@ -1133,7 +1133,8 @@ async function openDeckSettings(host, name) {
 
     try {
         const res = await fetch(`/api/control/${encodeURIComponent(host)}/configuration`);
-        const data = await res.json();
+        let data;
+        try { data = await res.json(); } catch (_) { data = {}; }
 
         loadingEl.classList.add('hidden');
 
@@ -1174,7 +1175,6 @@ async function openDeckSettings(host, name) {
 function closeDeckSettings() {
     document.getElementById('deck-settings-modal').classList.add('hidden');
     activeDeckSettingsHost = '';
-    activeDeckSettingsName = '';
 }
 
 async function saveDeckSettings() {
@@ -1210,7 +1210,8 @@ async function saveDeckSettings() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(settings),
         });
-        const data = await res.json();
+        let data;
+        try { data = await res.json(); } catch (_) { data = {}; }
 
         if (!res.ok) {
             if (statusEl) statusEl.innerText = `Error: ${data.detail || 'Unknown error'}`;

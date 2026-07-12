@@ -483,13 +483,13 @@ async def _load_all_deck_hosts() -> dict[str, str]:
     """Return the name→host mapping from the persisted config."""
     config = await get_config()
     hyperdecks = config.get("hyperdecks", {}) if isinstance(config, dict) else {}
-    return {str(name): str(host) for name, host in hyperdecks.items()}
+    return {str(name).strip(): str(host).strip() for name, host in hyperdecks.items()}
 
 
 async def _validate_deck_host(host: str) -> None:
     """Raise 404 if *host* is not in the persisted HyperDeck config."""
     decks = await _load_all_deck_hosts()
-    if host not in decks.values():
+    if host.strip() not in decks.values():
         raise HTTPException(
             status_code=404,
             detail=f"HyperDeck '{host}' is not in the configured device list.",
