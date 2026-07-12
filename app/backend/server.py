@@ -555,10 +555,7 @@ async def all_decks_stop():
 async def deck_record(host: str):
     """Send a *record* command to a single HyperDeck."""
     await _validate_deck_host(host)
-    # Use the configured deck name as the result label when available.
-    decks = await _load_all_deck_hosts()
-    deck_id = next((name for name, h in decks.items() if h == host), host)
-    result = await _send_command_to_deck(deck_id, host, "record")
+    result = await _send_command_to_deck(host, host, "record")
     if not result["success"]:
         status_code = result.get("status_code", 502)
         detail = result["response"] if status_code != 502 else f"HyperDeck rejected command: {result['response']}"
@@ -570,9 +567,7 @@ async def deck_record(host: str):
 async def deck_stop(host: str):
     """Send a *stop* command to a single HyperDeck."""
     await _validate_deck_host(host)
-    decks = await _load_all_deck_hosts()
-    deck_id = next((name for name, h in decks.items() if h == host), host)
-    result = await _send_command_to_deck(deck_id, host, "stop")
+    result = await _send_command_to_deck(host, host, "stop")
     if not result["success"]:
         status_code = result.get("status_code", 502)
         detail = result["response"] if status_code != 502 else f"HyperDeck rejected command: {result['response']}"

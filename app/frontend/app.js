@@ -1062,7 +1062,7 @@ async function sendDeckCommand(host, command) {
             console.info(`${label} on ${host}:`, data.response);
         }
     } catch (e) {
-        alert(`Could not reach HyperDeck at ${host}.`);
+        alert(`Could not reach backend API for ${host}.`);
     }
 }
 
@@ -1166,7 +1166,7 @@ async function openDeckSettings(host, name) {
         saveBtn.classList.remove('hidden');
     } catch (e) {
         loadingEl.classList.add('hidden');
-        errorEl.innerText = `Could not reach HyperDeck at ${host}.`;
+        errorEl.innerText = `Could not reach backend API for ${host}.`;
         errorEl.classList.remove('hidden');
     }
 }
@@ -1235,7 +1235,7 @@ async function saveDeckSettings() {
             } catch (_) { /* non-critical — stale values are acceptable */ }
         }
     } catch (e) {
-        if (statusEl) statusEl.innerText = 'Could not reach HyperDeck.';
+        if (statusEl) statusEl.innerText = 'Could not reach backend API.';
     } finally {
         saveBtn.disabled = false;
         saveBtn.innerText = 'Apply Settings';
