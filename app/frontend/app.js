@@ -1104,7 +1104,6 @@ async function openDeckSettings(host, name) {
     const errorEl = document.getElementById('deck-settings-error');
     const saveBtn = document.getElementById('btn-save-deck-settings');
     const statusEl = document.getElementById('deck-settings-status');
-    const currentEl = document.getElementById('deck-settings-current');
 
     hostLabel.innerText = `${name} — ${host}`;
     loadingEl.classList.remove('hidden');
@@ -1132,31 +1131,8 @@ async function openDeckSettings(host, name) {
             return;
         }
 
-        // Render current values panel
         const settings = data.settings || {};
-        const LABELS = {
-            'file format': 'File Format',
-            'video input': 'Video Input',
-            'audio input': 'Audio Input',
-            'audio codec': 'Audio Codec',
-            'timecode input': 'Timecode Input',
-            'timecode output': 'Timecode Output',
-        };
-        let currentHtml = '<span class="block font-semibold text-slate-500 tracking-wide uppercase text-[10px] mb-1.5">Current Device Values</span>';
-        const knownKeys = Object.keys(LABELS);
-        knownKeys.forEach(key => {
-            if (settings[key] !== undefined) {
-                currentHtml += `<div class="flex justify-between"><span class="text-slate-500">${LABELS[key]}</span><span class="text-slate-300">${settings[key]}</span></div>`;
-            }
-        });
-        const extraKeys = Object.keys(settings).filter(k => !knownKeys.includes(k));
-        extraKeys.forEach(key => {
-            currentHtml += `<div class="flex justify-between"><span class="text-slate-500">${key}</span><span class="text-slate-300">${settings[key]}</span></div>`;
-        });
-        if (knownKeys.length === 0 && extraKeys.length === 0) {
-            currentHtml += '<div class="text-slate-500 italic">No configuration data returned.</div>';
-        }
-        if (currentEl) currentEl.innerHTML = currentHtml;
+        _renderCurrentSettingsPanel(settings);
 
         // Pre-fill selects with current values if they match an option
         const fieldMap = {
@@ -1233,8 +1209,15 @@ async function saveDeckSettings() {
             if (statusEl) statusEl.innerText = `${failed.length} setting(s) rejected by device.`;
         } else {
             if (statusEl) statusEl.innerText = 'Settings applied successfully.';
-            // Refresh the current values display
-            await openDeckSettings(activeDeckSettingsHost, activeDeckSettingsName);
+            // Refresh only the current-values panel by re-fetching configuration.
+            // This avoids resetting the selects and reopening the whole modal.
+            try {
+                const cfgRes = await fetch(`/api/control/${encodeURIComponent(activeDeckSettingsHost)}/configuration`);
+                if (cfgRes.ok) {
+                    const cfgData = await cfgRes.json();
+                    _renderCurrentSettingsPanel(cfgData.settings || {});
+                }
+            } catch (_) { /* non-critical — stale values are acceptable */ }
         }
     } catch (e) {
         if (statusEl) statusEl.innerText = 'Could not reach HyperDeck.';
@@ -1242,6 +1225,33 @@ async function saveDeckSettings() {
         saveBtn.disabled = false;
         saveBtn.innerText = 'Apply Settings';
     }
+}
+
+function _renderCurrentSettingsPanel(settings) {
+    const currentEl = document.getElementById('deck-settings-current');
+    if (!currentEl) return;
+    const LABELS = {
+        'file format': 'File Format',
+        'video input': 'Video Input',
+        'audio input': 'Audio Input',
+        'audio codec': 'Audio Codec',
+        'timecode input': 'Timecode Input',
+        'timecode output': 'Timecode Output',
+    };
+    let html = '<span class="block font-semibold text-slate-500 tracking-wide uppercase text-[10px] mb-1.5">Current Device Values</span>';
+    const knownKeys = Object.keys(LABELS);
+    knownKeys.forEach(key => {
+        if (settings[key] !== undefined) {
+            html += `<div class="flex justify-between"><span class="text-slate-500">${LABELS[key]}</span><span class="text-slate-300">${settings[key]}</span></div>`;
+        }
+    });
+    Object.keys(settings).filter(k => !knownKeys.includes(k)).forEach(key => {
+        html += `<div class="flex justify-between"><span class="text-slate-500">${key}</span><span class="text-slate-300">${settings[key]}</span></div>`;
+    });
+    if (Object.keys(settings).length === 0) {
+        html += '<div class="text-slate-500 italic">No configuration data returned.</div>';
+    }
+    currentEl.innerHTML = html;
 }
 
 // Expose handlers for inline onclick attributes in index.html.

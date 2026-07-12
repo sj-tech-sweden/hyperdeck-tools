@@ -39,6 +39,10 @@ async def send_hyperdeck_command(
 
     try:
         # The protocol sends a multi-line banner ending with a blank line.
+        # The banner carries the HyperDeck model/firmware info but is not
+        # required for issuing individual commands, so it is intentionally
+        # discarded here.  Callers that need version negotiation can capture
+        # and parse the return value of a dedicated `device info` command.
         await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout=timeout)
 
         writer.write(f"{command}\r\n".encode())

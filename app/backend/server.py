@@ -484,16 +484,21 @@ async def _load_all_deck_hosts() -> dict[str, str]:
     return {str(name): str(host) for name, host in hyperdecks.items()}
 
 
-async def _send_command_to_deck(name: str, host: str, command: str) -> dict:
-    """Send *command* to a single HyperDeck and return a result dict (never raises)."""
+async def _send_command_to_deck(deck_id: str, host: str, command: str) -> dict:
+    """
+    Send *command* to a single HyperDeck and return a result dict (never raises).
+
+    *deck_id* is an arbitrary label used in the result (typically the configured
+    deck name, or the host address when no name is available).
+    """
     from app.backend.hyperdeck_control import send_hyperdeck_command, parse_hyperdeck_response
     try:
         response = await send_hyperdeck_command(host, command)
         parsed = parse_hyperdeck_response(response)
         success = parsed.get("_code") in (200, 100)
-        return {"name": name, "host": host, "success": success, "response": response}
+        return {"name": deck_id, "host": host, "success": success, "response": response}
     except HTTPException as exc:
-        return {"name": name, "host": host, "success": False, "response": exc.detail}
+        return {"name": deck_id, "host": host, "success": False, "response": exc.detail}
 
 
 # NOTE: Routes with literal path segments ("all") must be registered BEFORE
@@ -522,7 +527,10 @@ async def all_decks_stop():
 @app.post("/api/control/{host}/record")
 async def deck_record(host: str):
     """Send a *record* command to a single HyperDeck."""
-    result = await _send_command_to_deck(host, host, "record")
+    # Use the configured deck name as the result label when available.
+    decks = await _load_all_deck_hosts()
+    deck_id = next((name for name, h in decks.items() if h == host), host)
+    result = await _send_command_to_deck(deck_id, host, "record")
     if not result["success"]:
         raise HTTPException(status_code=502, detail=f"HyperDeck rejected command: {result['response']}")
     return {"status": "ok", "host": host, "response": result["response"]}
@@ -531,7 +539,9 @@ async def deck_record(host: str):
 @app.post("/api/control/{host}/stop")
 async def deck_stop(host: str):
     """Send a *stop* command to a single HyperDeck."""
-    result = await _send_command_to_deck(host, host, "stop")
+    decks = await _load_all_deck_hosts()
+    deck_id = next((name for name, h in decks.items() if h == host), host)
+    result = await _send_command_to_deck(deck_id, host, "stop")
     if not result["success"]:
         raise HTTPException(status_code=502, detail=f"HyperDeck rejected command: {result['response']}")
     return {"status": "ok", "host": host, "response": result["response"]}
