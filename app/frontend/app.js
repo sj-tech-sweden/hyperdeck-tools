@@ -332,9 +332,9 @@ async function updateDashboardMetrics() {
             const isRecording = item.status.toLowerCase() === 'recording';
             const pulseClass = isRecording ? 'bg-red-500 animate-pulse' : (item.connected ? 'bg-emerald-500' : 'bg-rose-500');
             const statusLabel = item.connected ? (item.status === 'Online' ? 'Online' : item.status) : item.status;
-            // Use JSON.stringify to produce safe JS string literals for event handler arguments.
-            const jsIp = JSON.stringify(ip);
-            const jsName = JSON.stringify(item.name || '');
+            // JSON literals are HTML-escaped before inserting into inline attributes.
+            const jsIpAttr = escHtml(JSON.stringify(ip));
+            const jsNameAttr = escHtml(JSON.stringify(item.name || ''));
             
             html += `
             <div class="rounded-lg border border-slate-800 bg-slate-900 p-5 shadow-sm">
@@ -366,15 +366,15 @@ async function updateDashboardMetrics() {
 
                 <!-- Per-deck transport controls -->
                 <div class="mt-4 flex items-center gap-2 border-t border-slate-800 pt-3">
-                    <button onclick="sendDeckCommand(${jsIp}, 'record')"
+                    <button onclick="sendDeckCommand(${jsIpAttr}, 'record')"
                         class="flex-1 rounded bg-red-600/90 hover:bg-red-500 px-2 py-1.5 text-xs font-semibold text-white transition cursor-pointer">
                         ⏺ Record
                     </button>
-                    <button onclick="sendDeckCommand(${jsIp}, 'stop')"
+                    <button onclick="sendDeckCommand(${jsIpAttr}, 'stop')"
                         class="flex-1 rounded bg-slate-700 hover:bg-slate-600 px-2 py-1.5 text-xs font-semibold text-white transition cursor-pointer">
                         ⏹ Stop
                     </button>
-                    <button onclick="openDeckSettings(${jsIp}, ${jsName})"
+                    <button onclick="openDeckSettings(${jsIpAttr}, ${jsNameAttr})"
                         class="rounded bg-slate-800 hover:bg-slate-700 px-2 py-1.5 text-xs text-slate-300 hover:text-white transition cursor-pointer" title="Deck settings">
                         ⚙
                     </button>
