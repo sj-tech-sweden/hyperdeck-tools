@@ -484,71 +484,57 @@ async def _load_all_deck_hosts() -> dict[str, str]:
     return {str(name): str(host) for name, host in hyperdecks.items()}
 
 
+async def _send_command_to_deck(name: str, host: str, command: str) -> dict:
+    """Send *command* to a single HyperDeck and return a result dict (never raises)."""
+    from app.backend.hyperdeck_control import send_hyperdeck_command, parse_hyperdeck_response
+    try:
+        response = await send_hyperdeck_command(host, command)
+        parsed = parse_hyperdeck_response(response)
+        success = parsed.get("_code") in (200, 100)
+        return {"name": name, "host": host, "success": success, "response": response}
+    except HTTPException as exc:
+        return {"name": name, "host": host, "success": False, "response": exc.detail}
+
+
 # NOTE: Routes with literal path segments ("all") must be registered BEFORE
 # parameterised routes ({host}) so FastAPI does not absorb "all" as a host value.
 
 @app.post("/api/control/all/record")
 async def all_decks_record():
     """Send a *record* command to every configured HyperDeck concurrently."""
-    from app.backend.hyperdeck_control import send_hyperdeck_command, parse_hyperdeck_response
     decks = await _load_all_deck_hosts()
     if not decks:
         raise HTTPException(status_code=400, detail="No HyperDecks configured.")
-
-    async def _record_one(name: str, host: str) -> dict:
-        try:
-            response = await send_hyperdeck_command(host, "record")
-            parsed = parse_hyperdeck_response(response)
-            success = parsed.get("_code") in (200, 100)
-            return {"name": name, "host": host, "success": success, "response": response}
-        except HTTPException as exc:
-            return {"name": name, "host": host, "success": False, "response": exc.detail}
-
-    results = await asyncio.gather(*(_record_one(n, h) for n, h in decks.items()))
+    results = await asyncio.gather(*(_send_command_to_deck(n, h, "record") for n, h in decks.items()))
     return {"status": "ok", "results": list(results)}
 
 
 @app.post("/api/control/all/stop")
 async def all_decks_stop():
     """Send a *stop* command to every configured HyperDeck concurrently."""
-    from app.backend.hyperdeck_control import send_hyperdeck_command, parse_hyperdeck_response
     decks = await _load_all_deck_hosts()
     if not decks:
         raise HTTPException(status_code=400, detail="No HyperDecks configured.")
-
-    async def _stop_one(name: str, host: str) -> dict:
-        try:
-            response = await send_hyperdeck_command(host, "stop")
-            parsed = parse_hyperdeck_response(response)
-            success = parsed.get("_code") in (200, 100)
-            return {"name": name, "host": host, "success": success, "response": response}
-        except HTTPException as exc:
-            return {"name": name, "host": host, "success": False, "response": exc.detail}
-
-    results = await asyncio.gather(*(_stop_one(n, h) for n, h in decks.items()))
+    results = await asyncio.gather(*(_send_command_to_deck(n, h, "stop") for n, h in decks.items()))
     return {"status": "ok", "results": list(results)}
 
 
 @app.post("/api/control/{host}/record")
 async def deck_record(host: str):
     """Send a *record* command to a single HyperDeck."""
-    from app.backend.hyperdeck_control import send_hyperdeck_command, parse_hyperdeck_response
-    response = await send_hyperdeck_command(host, "record")
-    parsed = parse_hyperdeck_response(response)
-    if parsed.get("_code") not in (200, 100):
-        raise HTTPException(status_code=502, detail=f"HyperDeck rejected command: {response}")
-    return {"status": "ok", "host": host, "response": response}
+    result = await _send_command_to_deck(host, host, "record")
+    if not result["success"]:
+        raise HTTPException(status_code=502, detail=f"HyperDeck rejected command: {result['response']}")
+    return {"status": "ok", "host": host, "response": result["response"]}
 
 
 @app.post("/api/control/{host}/stop")
 async def deck_stop(host: str):
     """Send a *stop* command to a single HyperDeck."""
-    from app.backend.hyperdeck_control import send_hyperdeck_command, parse_hyperdeck_response
-    response = await send_hyperdeck_command(host, "stop")
-    parsed = parse_hyperdeck_response(response)
-    if parsed.get("_code") not in (200, 100):
-        raise HTTPException(status_code=502, detail=f"HyperDeck rejected command: {response}")
-    return {"status": "ok", "host": host, "response": response}
+    result = await _send_command_to_deck(host, host, "stop")
+    if not result["success"]:
+        raise HTTPException(status_code=502, detail=f"HyperDeck rejected command: {result['response']}")
+    return {"status": "ok", "host": host, "response": result["response"]}
 
 
 @app.get("/api/control/{host}/configuration")

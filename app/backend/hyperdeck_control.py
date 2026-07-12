@@ -48,7 +48,7 @@ async def send_hyperdeck_command(
         response_bytes = await asyncio.wait_for(
             reader.readuntil(b"\r\n\r\n"), timeout=timeout
         )
-        return response_bytes.decode("utf-8", errors="ignore").strip()
+        return response_bytes.decode("utf-8", errors="replace").strip()
     except asyncio.TimeoutError:
         raise HTTPException(
             status_code=504,

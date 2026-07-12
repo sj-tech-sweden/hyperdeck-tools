@@ -322,8 +322,9 @@ async function updateDashboardMetrics() {
             const isRecording = item.status.toLowerCase() === 'recording';
             const pulseClass = isRecording ? 'bg-red-500 animate-pulse' : (item.connected ? 'bg-emerald-500' : 'bg-rose-500');
             const statusLabel = item.connected ? (item.status === 'Online' ? 'Online' : item.status) : item.status;
-            const safeIp = ip.replace(/'/g, "\\'");
-            const safeName = (item.name || '').replace(/'/g, "\\'");
+            // Use JSON.stringify to produce safe JS string literals for event handler arguments.
+            const jsIp = JSON.stringify(ip);
+            const jsName = JSON.stringify(item.name || '');
             
             html += `
             <div class="rounded-lg border border-slate-800 bg-slate-900 p-5 shadow-sm">
@@ -355,15 +356,15 @@ async function updateDashboardMetrics() {
 
                 <!-- Per-deck transport controls -->
                 <div class="mt-4 flex items-center gap-2 border-t border-slate-800 pt-3">
-                    <button onclick="sendDeckCommand('${safeIp}', 'record')"
+                    <button onclick="sendDeckCommand(${jsIp}, 'record')"
                         class="flex-1 rounded bg-red-600/90 hover:bg-red-500 px-2 py-1.5 text-xs font-semibold text-white transition cursor-pointer">
                         ⏺ Record
                     </button>
-                    <button onclick="sendDeckCommand('${safeIp}', 'stop')"
+                    <button onclick="sendDeckCommand(${jsIp}, 'stop')"
                         class="flex-1 rounded bg-slate-700 hover:bg-slate-600 px-2 py-1.5 text-xs font-semibold text-white transition cursor-pointer">
                         ⏹ Stop
                     </button>
-                    <button onclick="openDeckSettings('${safeIp}', '${safeName}')"
+                    <button onclick="openDeckSettings(${jsIp}, ${jsName})"
                         class="rounded bg-slate-800 hover:bg-slate-700 px-2 py-1.5 text-xs text-slate-300 hover:text-white transition cursor-pointer" title="Deck settings">
                         ⚙
                     </button>
@@ -1091,9 +1092,11 @@ async function sendCommandToAll(command) {
 // --- Deck Settings Modal ---
 
 let activeDeckSettingsHost = '';
+let activeDeckSettingsName = '';
 
 async function openDeckSettings(host, name) {
     activeDeckSettingsHost = host;
+    activeDeckSettingsName = name;
     const modal = document.getElementById('deck-settings-modal');
     const hostLabel = document.getElementById('deck-settings-host');
     const loadingEl = document.getElementById('deck-settings-loading');
@@ -1183,6 +1186,7 @@ async function openDeckSettings(host, name) {
 function closeDeckSettings() {
     document.getElementById('deck-settings-modal').classList.add('hidden');
     activeDeckSettingsHost = '';
+    activeDeckSettingsName = '';
 }
 
 async function saveDeckSettings() {
@@ -1230,7 +1234,7 @@ async function saveDeckSettings() {
         } else {
             if (statusEl) statusEl.innerText = 'Settings applied successfully.';
             // Refresh the current values display
-            await openDeckSettings(activeDeckSettingsHost, document.getElementById('deck-settings-host').innerText.split(' — ')[0]);
+            await openDeckSettings(activeDeckSettingsHost, activeDeckSettingsName);
         }
     } catch (e) {
         if (statusEl) statusEl.innerText = 'Could not reach HyperDeck.';
