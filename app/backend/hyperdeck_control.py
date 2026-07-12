@@ -49,30 +49,42 @@ async def send_hyperdeck_command(
         # required for issuing individual commands, so it is intentionally
         # discarded here.  Callers that need version negotiation can capture
         # and parse the return value of a dedicated `device info` command.
-        await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout=timeout)
+        try:
+            await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout=timeout)
+        except asyncio.TimeoutError:
+            raise HTTPException(
+                status_code=504,
+                detail=f"Timed out waiting for HyperDeck banner at {host}:{port}",
+            )
+        except (asyncio.IncompleteReadError, asyncio.LimitOverrunError) as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Incomplete banner from HyperDeck at {host}:{port}: {exc}",
+            )
 
         writer.write(f"{command}\r\n".encode())
         await writer.drain()
 
         # All responses end with a blank line (\r\n\r\n).
-        response_bytes = await asyncio.wait_for(
-            reader.readuntil(b"\r\n\r\n"), timeout=timeout
-        )
+        try:
+            response_bytes = await asyncio.wait_for(
+                reader.readuntil(b"\r\n\r\n"), timeout=timeout
+            )
+        except asyncio.TimeoutError:
+            raise HTTPException(
+                status_code=504,
+                detail=f"Command '{command}' timed out on HyperDeck at {host}:{port}",
+            )
+        except (asyncio.IncompleteReadError, asyncio.LimitOverrunError) as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Incomplete response from HyperDeck at {host}:{port}: {exc}",
+            )
         return response_bytes.decode("utf-8", errors="replace").strip()
-    except asyncio.TimeoutError:
-        raise HTTPException(
-            status_code=504,
-            detail=f"Command '{command}' timed out on HyperDeck at {host}:{port}",
-        )
     except OSError as exc:
         raise HTTPException(
             status_code=503,
             detail=f"Communication error with HyperDeck at {host}:{port}: {exc}",
-        )
-    except (asyncio.IncompleteReadError, asyncio.LimitOverrunError) as exc:
-        raise HTTPException(
-            status_code=503,
-            detail=f"Incomplete response from HyperDeck at {host}:{port}: {exc}",
         )
     finally:
         try:

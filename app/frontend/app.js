@@ -335,6 +335,8 @@ async function updateDashboardMetrics() {
             // JSON literals are HTML-escaped before inserting into inline attributes.
             const jsIpAttr = escHtml(JSON.stringify(ip));
             const jsNameAttr = escHtml(JSON.stringify(item.name || ''));
+            const parsedProgress = parseInt(item.progress, 10);
+            const progressPct = Number.isFinite(parsedProgress) ? Math.max(0, Math.min(100, parsedProgress)) : 0;
             
             html += `
             <div class="rounded-lg border border-slate-800 bg-slate-900 p-5 shadow-sm">
@@ -356,10 +358,10 @@ async function updateDashboardMetrics() {
                     <div class="space-y-1">
                         <div class="flex justify-between text-xs font-mono text-slate-400 truncate">
                             <span class="truncate pr-4">${escHtml(item.file)}</span>
-                            <span>${parseInt(item.progress, 10)}%</span>
+                            <span>${progressPct}%</span>
                         </div>
                         <div class="w-full bg-slate-950 rounded-full h-1.5 overflow-hidden">
-                            <div class="bg-indigo-500 h-1.5 rounded-full transition-all duration-300" style="width: ${parseInt(item.progress, 10)}%"></div>
+                            <div class="bg-indigo-500 h-1.5 rounded-full transition-all duration-300" style="width: ${progressPct}%"></div>
                         </div>
                     </div>
                 ` : `<div class="text-xs text-slate-500 italic">No storage IO operations running</div>`}

@@ -510,7 +510,13 @@ async def _send_command_to_deck(deck_id: str, host: str, command: str) -> dict:
         success = parsed.get("_code") in (200, 100)
         return {"name": deck_id, "host": host, "success": success, "response": response}
     except HTTPException as exc:
-        return {"name": deck_id, "host": host, "success": False, "response": exc.detail}
+        return {
+            "name": deck_id,
+            "host": host,
+            "success": False,
+            "response": exc.detail,
+            "status_code": exc.status_code,
+        }
     except Exception:
         logger.exception("Unexpected error sending HyperDeck command to %s", host)
         return {
@@ -518,6 +524,7 @@ async def _send_command_to_deck(deck_id: str, host: str, command: str) -> dict:
             "host": host,
             "success": False,
             "response": "Unexpected communication error.",
+            "status_code": 503,
         }
 
 
@@ -553,7 +560,9 @@ async def deck_record(host: str):
     deck_id = next((name for name, h in decks.items() if h == host), host)
     result = await _send_command_to_deck(deck_id, host, "record")
     if not result["success"]:
-        raise HTTPException(status_code=502, detail=f"HyperDeck rejected command: {result['response']}")
+        status_code = result.get("status_code", 502)
+        detail = result["response"] if status_code != 502 else f"HyperDeck rejected command: {result['response']}"
+        raise HTTPException(status_code=status_code, detail=detail)
     return {"status": "ok", "host": host, "response": result["response"]}
 
 
@@ -565,7 +574,9 @@ async def deck_stop(host: str):
     deck_id = next((name for name, h in decks.items() if h == host), host)
     result = await _send_command_to_deck(deck_id, host, "stop")
     if not result["success"]:
-        raise HTTPException(status_code=502, detail=f"HyperDeck rejected command: {result['response']}")
+        status_code = result.get("status_code", 502)
+        detail = result["response"] if status_code != 502 else f"HyperDeck rejected command: {result['response']}"
+        raise HTTPException(status_code=status_code, detail=detail)
     return {"status": "ok", "host": host, "response": result["response"]}
 
 
