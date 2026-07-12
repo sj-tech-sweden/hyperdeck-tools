@@ -80,7 +80,7 @@ def parse_hyperdeck_response(response: str) -> dict:
     into the dict under their trimmed keys.  Two meta-keys are always
     present:
 
-    * ``_code``   – integer response code (200 = success)
+    * ``_code``   – integer response code (200 = success; 0 if unparseable)
     * ``_status`` – raw first line of the response
     """
     lines = response.replace("\r\n", "\n").split("\n")
@@ -94,7 +94,7 @@ def parse_hyperdeck_response(response: str) -> dict:
             try:
                 result["_code"] = int(parts[0])
             except (ValueError, IndexError):
-                result["_code"] = None
+                result["_code"] = 0  # Default to 0 (unrecognised) on parse failure
             result["_status"] = line
             continue
         if ":" in line:

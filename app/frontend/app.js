@@ -77,6 +77,16 @@ function hintBadge(message) {
     return `<span class="ml-1 inline-flex flex-col align-top group cursor-help" tabindex="0" aria-label="Hint"><span class="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full border border-slate-700 text-[9px] text-slate-500">?</span><span class="hidden group-hover:block group-focus:block mt-1 rounded border border-slate-700 bg-slate-950 px-1.5 py-0.5 text-[10px] normal-case leading-snug text-slate-300 break-words max-w-44">${message}</span></span>`;
 }
 
+/** Escape a string for safe insertion into HTML to prevent XSS. */
+function escHtml(str) {
+    return String(str ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+
 function openNativePicker(inputEl) {
     if (!inputEl) return;
     inputEl.focus();
@@ -1242,11 +1252,13 @@ function _renderCurrentSettingsPanel(settings) {
     const knownKeys = Object.keys(LABELS);
     knownKeys.forEach(key => {
         if (settings[key] !== undefined) {
-            html += `<div class="flex justify-between"><span class="text-slate-500">${LABELS[key]}</span><span class="text-slate-300">${settings[key]}</span></div>`;
+            // LABELS[key] is a static string — escHtml applied to the device value only
+            html += `<div class="flex justify-between"><span class="text-slate-500">${LABELS[key]}</span><span class="text-slate-300">${escHtml(settings[key])}</span></div>`;
         }
     });
     Object.keys(settings).filter(k => !knownKeys.includes(k)).forEach(key => {
-        html += `<div class="flex justify-between"><span class="text-slate-500">${key}</span><span class="text-slate-300">${settings[key]}</span></div>`;
+        // Both key and value come from the device — escape both
+        html += `<div class="flex justify-between"><span class="text-slate-500">${escHtml(key)}</span><span class="text-slate-300">${escHtml(settings[key])}</span></div>`;
     });
     if (Object.keys(settings).length === 0) {
         html += '<div class="text-slate-500 italic">No configuration data returned.</div>';
