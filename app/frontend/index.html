@@ -16,7 +16,13 @@
                     <h1 class="text-3xl font-bold tracking-tight text-white">HyperDeck Control Matrix</h1>
                     <p class="mt-2 text-sm text-slate-400">Automated multi-device media capture system.</p>
                 </div>
-                <div>
+                <div class="flex items-center gap-3">
+                    <button onclick="sendCommandToAll('record')" id="btn-record-all" class="rounded-md bg-red-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-red-500 transition cursor-pointer">
+                        ⏺ Record All
+                    </button>
+                    <button onclick="sendCommandToAll('stop')" id="btn-stop-all" class="rounded-md bg-slate-700 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-600 transition cursor-pointer">
+                        ⏹ Stop All
+                    </button>
                     <button onclick="triggerDiscovery()" id="btn-discover" class="rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500 transition cursor-pointer">
                         Scan Network
                     </button>
@@ -188,6 +194,78 @@
             </section>
 
         </main>
+    </div>
+
+    <!-- Deck Settings Modal -->
+    <div id="deck-settings-modal" class="hidden fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+        <div class="bg-slate-900 border border-slate-800 rounded-lg max-w-lg w-full p-6 flex flex-col shadow-2xl">
+            <div class="flex items-center justify-between border-b border-slate-800 pb-4 mb-4">
+                <div>
+                    <h3 class="text-lg font-semibold text-white">Deck Settings</h3>
+                    <p id="deck-settings-host" class="text-xs text-slate-400 font-mono mt-0.5"></p>
+                </div>
+                <button type="button" onclick="closeDeckSettings()" aria-label="Close deck settings" class="text-slate-400 hover:text-white cursor-pointer text-xl">✕</button>
+            </div>
+
+            <div id="deck-settings-loading" class="text-sm text-slate-400 italic py-4 text-center">Loading configuration…</div>
+
+            <div id="deck-settings-form" class="hidden space-y-3">
+                <div class="grid grid-cols-2 gap-3">
+                    <label class="text-xs text-slate-400 space-y-1">
+                        <span class="block">File Format</span>
+                        <select id="ds-file-format" class="block w-full rounded bg-slate-950 border border-slate-800 text-xs px-2 py-1.5 text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500">
+                            <option value="">— unchanged —</option>
+                            <option value="QuickTimeProRes">QuickTime ProRes</option>
+                            <option value="QuickTimeProResHQ">QuickTime ProRes HQ</option>
+                            <option value="QuickTimeDNxHD">QuickTime DNxHD</option>
+                            <option value="QuickTimeDNxHR">QuickTime DNxHR</option>
+                            <option value="H.264High">H.264 High</option>
+                            <option value="H.265High">H.265 High</option>
+                        </select>
+                    </label>
+                    <label class="text-xs text-slate-400 space-y-1">
+                        <span class="block">Video Input</span>
+                        <select id="ds-video-input" class="block w-full rounded bg-slate-950 border border-slate-800 text-xs px-2 py-1.5 text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500">
+                            <option value="">— unchanged —</option>
+                            <option value="HDMI">HDMI</option>
+                            <option value="SDI">SDI</option>
+                            <option value="Component">Component</option>
+                        </select>
+                    </label>
+                    <label class="text-xs text-slate-400 space-y-1">
+                        <span class="block">Audio Input</span>
+                        <select id="ds-audio-input" class="block w-full rounded bg-slate-950 border border-slate-800 text-xs px-2 py-1.5 text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500">
+                            <option value="">— unchanged —</option>
+                            <option value="Embedded">Embedded</option>
+                            <option value="XLR">XLR</option>
+                            <option value="RCA">RCA</option>
+                        </select>
+                    </label>
+                    <label class="text-xs text-slate-400 space-y-1">
+                        <span class="block">Audio Codec</span>
+                        <select id="ds-audio-codec" class="block w-full rounded bg-slate-950 border border-slate-800 text-xs px-2 py-1.5 text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500">
+                            <option value="">— unchanged —</option>
+                            <option value="PCM">PCM</option>
+                            <option value="AAC">AAC</option>
+                        </select>
+                    </label>
+                </div>
+
+                <!-- Current values read from device -->
+                <div id="deck-settings-current" class="rounded border border-slate-800 bg-slate-950 p-3 text-[11px] font-mono text-slate-400 space-y-1">
+                    <span class="block font-semibold text-slate-500 tracking-wide uppercase text-[10px] mb-1.5">Current Device Values</span>
+                </div>
+
+                <p id="deck-settings-status" class="text-[11px] text-slate-500 min-h-[1.25rem]"></p>
+            </div>
+
+            <div id="deck-settings-error" class="hidden text-sm text-rose-400 py-2"></div>
+
+            <div class="flex justify-end gap-3 border-t border-slate-800 pt-4 mt-4">
+                <button onclick="closeDeckSettings()" class="px-4 py-2 text-sm text-slate-400 hover:text-white rounded border border-slate-800 cursor-pointer">Cancel</button>
+                <button onclick="saveDeckSettings()" id="btn-save-deck-settings" class="px-4 py-2 text-sm bg-indigo-600 hover:bg-indigo-500 text-white font-semibold rounded shadow cursor-pointer hidden">Apply Settings</button>
+            </div>
+        </div>
     </div>
 
     <!-- Host Filesystem Directory Browser Modal Component -->

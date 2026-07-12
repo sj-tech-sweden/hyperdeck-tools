@@ -77,6 +77,16 @@ function hintBadge(message) {
     return `<span class="ml-1 inline-flex flex-col align-top group cursor-help" tabindex="0" aria-label="Hint"><span class="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full border border-slate-700 text-[9px] text-slate-500">?</span><span class="hidden group-hover:block group-focus:block mt-1 rounded border border-slate-700 bg-slate-950 px-1.5 py-0.5 text-[10px] normal-case leading-snug text-slate-300 break-words max-w-44">${message}</span></span>`;
 }
 
+/** Escape a string for safe insertion into HTML to prevent XSS. */
+function escHtml(str) {
+    return String(str ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+
 function openNativePicker(inputEl) {
     if (!inputEl) return;
     inputEl.focus();
@@ -322,34 +332,55 @@ async function updateDashboardMetrics() {
             const isRecording = item.status.toLowerCase() === 'recording';
             const pulseClass = isRecording ? 'bg-red-500 animate-pulse' : (item.connected ? 'bg-emerald-500' : 'bg-rose-500');
             const statusLabel = item.connected ? (item.status === 'Online' ? 'Online' : item.status) : item.status;
+            // JSON literals are HTML-escaped before inserting into inline attributes.
+            const jsIpAttr = escHtml(JSON.stringify(ip));
+            const jsNameAttr = escHtml(JSON.stringify(item.name || ''));
+            const parsedProgress = parseInt(item.progress, 10);
+            const progressPct = Number.isFinite(parsedProgress) ? Math.max(0, Math.min(100, parsedProgress)) : 0;
             
             html += `
             <div class="rounded-lg border border-slate-800 bg-slate-900 p-5 shadow-sm">
                 <div class="flex items-center justify-between mb-4">
                     <div>
-                        <h3 class="font-semibold text-white text-base">${item.name}</h3>
-                        <p class="text-xs text-slate-400 font-mono">${ip}</p>
+                        <h3 class="font-semibold text-white text-base">${escHtml(item.name)}</h3>
+                        <p class="text-xs text-slate-400 font-mono">${escHtml(ip)}</p>
                     </div>
                     <span class="inline-flex items-center gap-x-1.5 rounded-full px-2 py-1 text-xs font-medium text-white ring-1 ring-inset ring-slate-800">
                         <svg class="h-1.5 w-1.5 ${pulseClass} rounded-full" viewBox="0 0 6 6" aria-hidden="true"><circle cx="3" cy="3" r="3" /></svg>
-                        ${statusLabel}
+                        ${escHtml(statusLabel)}
                     </span>
                 </div>
-                ${item.stage ? `<div class="text-[11px] text-indigo-300 mb-2">Stage: ${item.stage}</div>` : ''}
-                ${item.next_event ? `<div class="text-[11px] text-slate-300 mb-1">Next: <span class="text-white">${item.next_event.planned_title || 'Unnamed Event'}</span> (${item.next_event.start_time || 'No time'})</div>` : '<div class="text-[11px] text-slate-500 mb-1">Next: No matching schedule event found</div>'}
-                ${item.matched_event ? `<div class="text-[11px] mb-2 ${item.auto_selected ? 'text-emerald-300' : 'text-slate-400'}">Auto Match: ${item.matched_event.planned_title} (${item.matched_event.minutes_diff} min diff)</div>` : '<div class="text-[11px] text-slate-500 mb-2">Auto Match: None within drift window</div>'}
+                ${item.stage ? `<div class="text-[11px] text-indigo-300 mb-2">Stage: ${escHtml(item.stage)}</div>` : ''}
+                ${item.next_event ? `<div class="text-[11px] text-slate-300 mb-1">Next: <span class="text-white">${escHtml(item.next_event.planned_title || 'Unnamed Event')}</span> (${escHtml(item.next_event.start_time || 'No time')})</div>` : '<div class="text-[11px] text-slate-500 mb-1">Next: No matching schedule event found</div>'}
+                ${item.matched_event ? `<div class="text-[11px] mb-2 ${item.auto_selected ? 'text-emerald-300' : 'text-slate-400'}">Auto Match: ${escHtml(item.matched_event.planned_title)} (${escHtml(item.matched_event.minutes_diff)} min diff)</div>` : '<div class="text-[11px] text-slate-500 mb-2">Auto Match: None within drift window</div>'}
                 
                 ${item.progress > 0 || item.file ? `
                     <div class="space-y-1">
                         <div class="flex justify-between text-xs font-mono text-slate-400 truncate">
-                            <span class="truncate pr-4">${item.file}</span>
-                            <span>${item.progress}%</span>
+                            <span class="truncate pr-4">${escHtml(item.file)}</span>
+                            <span>${progressPct}%</span>
                         </div>
                         <div class="w-full bg-slate-950 rounded-full h-1.5 overflow-hidden">
-                            <div class="bg-indigo-500 h-1.5 rounded-full transition-all duration-300" style="width: ${item.progress}%"></div>
+                            <div class="bg-indigo-500 h-1.5 rounded-full transition-all duration-300" style="width: ${progressPct}%"></div>
                         </div>
                     </div>
                 ` : `<div class="text-xs text-slate-500 italic">No storage IO operations running</div>`}
+
+                <!-- Per-deck transport controls -->
+                <div class="mt-4 flex items-center gap-2 border-t border-slate-800 pt-3">
+                    <button onclick="sendDeckCommand(${jsIpAttr}, 'record')"
+                        class="flex-1 rounded bg-red-600/90 hover:bg-red-500 px-2 py-1.5 text-xs font-semibold text-white transition cursor-pointer">
+                        ⏺ Record
+                    </button>
+                    <button onclick="sendDeckCommand(${jsIpAttr}, 'stop')"
+                        class="flex-1 rounded bg-slate-700 hover:bg-slate-600 px-2 py-1.5 text-xs font-semibold text-white transition cursor-pointer">
+                        ⏹ Stop
+                    </button>
+                    <button type="button" onclick="openDeckSettings(${jsIpAttr}, ${jsNameAttr})"
+                        class="rounded bg-slate-800 hover:bg-slate-700 px-2 py-1.5 text-xs text-slate-300 hover:text-white transition cursor-pointer" aria-label="Deck settings">
+                        ⚙
+                    </button>
+                </div>
             </div>`;
         }
         container.innerHTML = html;
@@ -1017,6 +1048,230 @@ function updatePluginDetails() {
     }
 }
 
+// --- HyperDeck Transport Controls ---
+
+/** Send a record or stop command to a single deck and surface feedback to the user. */
+async function sendDeckCommand(host, command) {
+    const label = command === 'record' ? '⏺ Recording' : '⏹ Stopped';
+    try {
+        const res = await fetch(`/api/control/${encodeURIComponent(host)}/${command}`, { method: 'POST' });
+        let data;
+        try { data = await res.json(); } catch (_) { data = {}; }
+        if (!res.ok) {
+            alert(`Command failed on ${host}: ${data.detail || 'Unknown error'}`);
+        } else {
+            console.info(`${label} on ${host}:`, data.response);
+        }
+    } catch (e) {
+        alert(`Could not reach backend API for ${host}.`);
+    }
+}
+
+/**
+ * Send a record or stop command to ALL configured decks and surface a summary.
+ * @param {'record'|'stop'} command
+ */
+async function sendCommandToAll(command) {
+    const label = command === 'record' ? 'Record All' : 'Stop All';
+    const btnId = command === 'record' ? 'btn-record-all' : 'btn-stop-all';
+    const btn = document.getElementById(btnId);
+    if (btn) {
+        btn.disabled = true;
+        btn.innerText = command === 'record' ? '⏺ Recording…' : '⏹ Stopping…';
+    }
+    try {
+        const res = await fetch(`/api/control/all/${command}`, { method: 'POST' });
+        let data;
+        try { data = await res.json(); } catch (_) { data = {}; }
+        if (!res.ok) {
+            alert(`${label} failed: ${data.detail || 'Unknown error'}`);
+            return;
+        }
+        const results = data.results || [];
+        const failed = results.filter(r => !r.success);
+        if (failed.length > 0) {
+            const names = failed.map(r => r.name || r.host).join(', ');
+            alert(`${label}: command failed on ${failed.length} deck(s): ${names}`);
+        }
+    } catch (e) {
+        alert(`${label}: could not reach server.`);
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerText = command === 'record' ? '⏺ Record All' : '⏹ Stop All';
+        }
+    }
+}
+
+// --- Deck Settings Modal ---
+
+let activeDeckSettingsHost = '';
+
+async function openDeckSettings(host, name) {
+    activeDeckSettingsHost = host;
+    const modal = document.getElementById('deck-settings-modal');
+    const hostLabel = document.getElementById('deck-settings-host');
+    const loadingEl = document.getElementById('deck-settings-loading');
+    const formEl = document.getElementById('deck-settings-form');
+    const errorEl = document.getElementById('deck-settings-error');
+    const saveBtn = document.getElementById('btn-save-deck-settings');
+    const statusEl = document.getElementById('deck-settings-status');
+
+    hostLabel.innerText = `${name} — ${host}`;
+    loadingEl.classList.remove('hidden');
+    formEl.classList.add('hidden');
+    errorEl.classList.add('hidden');
+    saveBtn.classList.add('hidden');
+    if (statusEl) statusEl.innerText = '';
+    modal.classList.remove('hidden');
+
+    // Reset selects to "unchanged"
+    ['ds-file-format', 'ds-video-input', 'ds-audio-input', 'ds-audio-codec'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.value = '';
+    });
+
+    try {
+        const res = await fetch(`/api/control/${encodeURIComponent(host)}/configuration`);
+        let data;
+        try { data = await res.json(); } catch (_) { data = {}; }
+
+        loadingEl.classList.add('hidden');
+
+        if (!res.ok) {
+            errorEl.innerText = data.detail || 'Failed to load configuration.';
+            errorEl.classList.remove('hidden');
+            return;
+        }
+
+        const settings = data.settings || {};
+        _renderCurrentSettingsPanel(settings);
+
+        // Pre-fill selects with current values if they match an option
+        const fieldMap = {
+            'file format': 'ds-file-format',
+            'video input': 'ds-video-input',
+            'audio input': 'ds-audio-input',
+            'audio codec': 'ds-audio-codec',
+        };
+        Object.entries(fieldMap).forEach(([settingKey, elId]) => {
+            const val = settings[settingKey];
+            if (!val) return;
+            const select = document.getElementById(elId);
+            if (!select) return;
+            const optionExists = Array.from(select.options).some(o => o.value === val);
+            select.value = optionExists ? val : '';
+        });
+
+        formEl.classList.remove('hidden');
+        saveBtn.classList.remove('hidden');
+    } catch (e) {
+        loadingEl.classList.add('hidden');
+        errorEl.innerText = `Could not reach backend API for ${host}.`;
+        errorEl.classList.remove('hidden');
+    }
+}
+
+function closeDeckSettings() {
+    document.getElementById('deck-settings-modal').classList.add('hidden');
+    activeDeckSettingsHost = '';
+}
+
+async function saveDeckSettings() {
+    if (!activeDeckSettingsHost) return;
+    const requestHost = activeDeckSettingsHost;
+    const statusEl = document.getElementById('deck-settings-status');
+    const saveBtn = document.getElementById('btn-save-deck-settings');
+
+    const settings = {};
+    const fieldMap = {
+        'ds-file-format': 'file format',
+        'ds-video-input': 'video input',
+        'ds-audio-input': 'audio input',
+        'ds-audio-codec': 'audio codec',
+    };
+    Object.entries(fieldMap).forEach(([elId, key]) => {
+        const el = document.getElementById(elId);
+        if (el && el.value) settings[key] = el.value;
+    });
+
+    if (Object.keys(settings).length === 0) {
+        if (statusEl) statusEl.innerText = 'No changes selected.';
+        return;
+    }
+
+    saveBtn.disabled = true;
+    saveBtn.innerText = 'Applying…';
+    if (statusEl) statusEl.innerText = '';
+
+    try {
+        const res = await fetch(`/api/control/${encodeURIComponent(requestHost)}/configuration`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(settings),
+        });
+        let data;
+        try { data = await res.json(); } catch (_) { data = {}; }
+
+        if (!res.ok) {
+            if (statusEl) statusEl.innerText = `Error: ${data.detail || 'Unknown error'}`;
+            return;
+        }
+
+        const failed = (data.results || []).filter(r => !r.success);
+        if (failed.length > 0) {
+            if (statusEl) statusEl.innerText = `${failed.length} setting(s) rejected by device.`;
+        } else {
+            if (statusEl) statusEl.innerText = 'Settings applied successfully.';
+            // Refresh only the current-values panel by re-fetching configuration.
+            // This avoids resetting the selects and reopening the whole modal.
+            try {
+                const cfgRes = await fetch(`/api/control/${encodeURIComponent(requestHost)}/configuration`);
+                if (cfgRes.ok) {
+                    const cfgData = await cfgRes.json();
+                    if (activeDeckSettingsHost === requestHost) {
+                        _renderCurrentSettingsPanel(cfgData.settings || {});
+                    }
+                }
+            } catch (_) { /* non-critical — stale values are acceptable */ }
+        }
+    } catch (e) {
+        if (statusEl) statusEl.innerText = 'Could not reach backend API.';
+    } finally {
+        saveBtn.disabled = false;
+        saveBtn.innerText = 'Apply Settings';
+    }
+}
+
+function _renderCurrentSettingsPanel(settings) {
+    const currentEl = document.getElementById('deck-settings-current');
+    if (!currentEl) return;
+    const LABELS = {
+        'file format': 'File Format',
+        'video input': 'Video Input',
+        'audio input': 'Audio Input',
+        'audio codec': 'Audio Codec',
+        'timecode input': 'Timecode Input',
+        'timecode output': 'Timecode Output',
+    };
+    let html = '<span class="block font-semibold text-slate-500 tracking-wide uppercase text-[10px] mb-1.5">Current Device Values</span>';
+    const knownKeys = Object.keys(LABELS);
+    knownKeys.forEach(key => {
+        if (settings[key] !== undefined) {
+            // LABELS[key] is a static string — escHtml applied to the device value only
+            html += `<div class="flex justify-between"><span class="text-slate-500">${LABELS[key]}</span><span class="text-slate-300">${escHtml(settings[key])}</span></div>`;
+        }
+    });
+    Object.keys(settings).filter(k => !knownKeys.includes(k)).forEach(key => {
+        // Both key and value come from the device — escape both
+        html += `<div class="flex justify-between"><span class="text-slate-500">${escHtml(key)}</span><span class="text-slate-300">${escHtml(settings[key])}</span></div>`;
+    });
+    if (Object.keys(settings).length === 0) {
+        html += '<div class="text-slate-500 italic">No configuration data returned.</div>';
+    }
+    currentEl.innerHTML = html;
+}
+
 // Expose handlers for inline onclick attributes in index.html.
 Object.assign(window, {
     triggerDiscovery,
@@ -1036,6 +1291,11 @@ Object.assign(window, {
     uploadScheduleFile,
     openNativePicker,
     openSiblingPicker,
+    sendDeckCommand,
+    sendCommandToAll,
+    openDeckSettings,
+    closeDeckSettings,
+    saveDeckSettings,
 });
 
 // Update your primary load sequence to populate the HUD card on application bootup
