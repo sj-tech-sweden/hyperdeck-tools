@@ -486,6 +486,16 @@ async def _load_all_deck_hosts() -> dict[str, str]:
     return {str(name): str(host) for name, host in hyperdecks.items()}
 
 
+async def _validate_deck_host(host: str) -> None:
+    """Raise 404 if *host* is not in the persisted HyperDeck config."""
+    decks = await _load_all_deck_hosts()
+    if host not in decks.values():
+        raise HTTPException(
+            status_code=404,
+            detail=f"HyperDeck '{host}' is not in the configured device list.",
+        )
+
+
 async def _send_command_to_deck(deck_id: str, host: str, command: str) -> dict:
     """
     Send *command* to a single HyperDeck and return a result dict (never raises).
@@ -537,6 +547,7 @@ async def all_decks_stop():
 @app.post("/api/control/{host}/record")
 async def deck_record(host: str):
     """Send a *record* command to a single HyperDeck."""
+    await _validate_deck_host(host)
     # Use the configured deck name as the result label when available.
     decks = await _load_all_deck_hosts()
     deck_id = next((name for name, h in decks.items() if h == host), host)
@@ -549,6 +560,7 @@ async def deck_record(host: str):
 @app.post("/api/control/{host}/stop")
 async def deck_stop(host: str):
     """Send a *stop* command to a single HyperDeck."""
+    await _validate_deck_host(host)
     decks = await _load_all_deck_hosts()
     deck_id = next((name for name, h in decks.items() if h == host), host)
     result = await _send_command_to_deck(deck_id, host, "stop")
@@ -560,6 +572,7 @@ async def deck_stop(host: str):
 @app.get("/api/control/{host}/configuration")
 async def get_deck_configuration(host: str):
     """Retrieve the current configuration from a single HyperDeck."""
+    await _validate_deck_host(host)
     from app.backend.hyperdeck_control import send_hyperdeck_command, parse_hyperdeck_response
     response = await send_hyperdeck_command(host, "configuration")
     parsed = parse_hyperdeck_response(response)
@@ -577,6 +590,7 @@ async def set_deck_configuration(host: str, settings: dict):
     Each key-value pair in *settings* becomes a separate configuration command.
     Returns per-command success/failure information.
     """
+    await _validate_deck_host(host)
     from app.backend.hyperdeck_control import (
         send_hyperdeck_command,
         parse_hyperdeck_response,

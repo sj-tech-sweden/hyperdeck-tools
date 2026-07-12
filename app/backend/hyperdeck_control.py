@@ -86,27 +86,33 @@ def parse_hyperdeck_response(response: str) -> dict:
     """
     Parse a HyperDeck protocol response into a plain dict.
 
-    The first line carries the numeric response code and a label, e.g.
-    ``200 configuration:``.  Subsequent ``key: value`` lines are folded
+    The first non-blank line carries the numeric response code and a label,
+    e.g. ``200 configuration:``.  Subsequent ``key: value`` lines are folded
     into the dict under their trimmed keys.  Two meta-keys are always
     present:
 
     * ``_code``   – integer response code (200 = success; 0 if unparseable)
-    * ``_status`` – raw first line of the response
+    * ``_status`` – raw first non-blank line of the response (empty string if
+                    the response is empty/whitespace)
     """
     lines = response.replace("\r\n", "\n").split("\n")
-    result: dict = {}
-    for i, line in enumerate(lines):
+    # Guarantee that _code/_status are always present, even for empty responses.
+    result: dict = {"_code": 0, "_status": ""}
+    status_parsed = False
+    for line in lines:
         line = line.strip()
         if not line:
             continue
-        if i == 0:
+        if not status_parsed:
+            # Treat the first non-blank line as the status line regardless of
+            # its physical position in the response (handles leading blank lines).
             parts = line.split(" ", 1)
             try:
                 result["_code"] = int(parts[0])
             except (ValueError, IndexError):
                 result["_code"] = 0  # Default to 0 (unrecognised) on parse failure
             result["_status"] = line
+            status_parsed = True
             continue
         if ":" in line:
             key, _, value = line.partition(":")

@@ -340,26 +340,26 @@ async function updateDashboardMetrics() {
             <div class="rounded-lg border border-slate-800 bg-slate-900 p-5 shadow-sm">
                 <div class="flex items-center justify-between mb-4">
                     <div>
-                        <h3 class="font-semibold text-white text-base">${item.name}</h3>
-                        <p class="text-xs text-slate-400 font-mono">${ip}</p>
+                        <h3 class="font-semibold text-white text-base">${escHtml(item.name)}</h3>
+                        <p class="text-xs text-slate-400 font-mono">${escHtml(ip)}</p>
                     </div>
                     <span class="inline-flex items-center gap-x-1.5 rounded-full px-2 py-1 text-xs font-medium text-white ring-1 ring-inset ring-slate-800">
                         <svg class="h-1.5 w-1.5 ${pulseClass} rounded-full" viewBox="0 0 6 6" aria-hidden="true"><circle cx="3" cy="3" r="3" /></svg>
-                        ${statusLabel}
+                        ${escHtml(statusLabel)}
                     </span>
                 </div>
-                ${item.stage ? `<div class="text-[11px] text-indigo-300 mb-2">Stage: ${item.stage}</div>` : ''}
-                ${item.next_event ? `<div class="text-[11px] text-slate-300 mb-1">Next: <span class="text-white">${item.next_event.planned_title || 'Unnamed Event'}</span> (${item.next_event.start_time || 'No time'})</div>` : '<div class="text-[11px] text-slate-500 mb-1">Next: No matching schedule event found</div>'}
-                ${item.matched_event ? `<div class="text-[11px] mb-2 ${item.auto_selected ? 'text-emerald-300' : 'text-slate-400'}">Auto Match: ${item.matched_event.planned_title} (${item.matched_event.minutes_diff} min diff)</div>` : '<div class="text-[11px] text-slate-500 mb-2">Auto Match: None within drift window</div>'}
+                ${item.stage ? `<div class="text-[11px] text-indigo-300 mb-2">Stage: ${escHtml(item.stage)}</div>` : ''}
+                ${item.next_event ? `<div class="text-[11px] text-slate-300 mb-1">Next: <span class="text-white">${escHtml(item.next_event.planned_title || 'Unnamed Event')}</span> (${escHtml(item.next_event.start_time || 'No time')})</div>` : '<div class="text-[11px] text-slate-500 mb-1">Next: No matching schedule event found</div>'}
+                ${item.matched_event ? `<div class="text-[11px] mb-2 ${item.auto_selected ? 'text-emerald-300' : 'text-slate-400'}">Auto Match: ${escHtml(item.matched_event.planned_title)} (${escHtml(item.matched_event.minutes_diff)} min diff)</div>` : '<div class="text-[11px] text-slate-500 mb-2">Auto Match: None within drift window</div>'}
                 
                 ${item.progress > 0 || item.file ? `
                     <div class="space-y-1">
                         <div class="flex justify-between text-xs font-mono text-slate-400 truncate">
-                            <span class="truncate pr-4">${item.file}</span>
-                            <span>${item.progress}%</span>
+                            <span class="truncate pr-4">${escHtml(item.file)}</span>
+                            <span>${parseInt(item.progress, 10)}%</span>
                         </div>
                         <div class="w-full bg-slate-950 rounded-full h-1.5 overflow-hidden">
-                            <div class="bg-indigo-500 h-1.5 rounded-full transition-all duration-300" style="width: ${item.progress}%"></div>
+                            <div class="bg-indigo-500 h-1.5 rounded-full transition-all duration-300" style="width: ${parseInt(item.progress, 10)}%"></div>
                         </div>
                     </div>
                 ` : `<div class="text-xs text-slate-500 italic">No storage IO operations running</div>`}
