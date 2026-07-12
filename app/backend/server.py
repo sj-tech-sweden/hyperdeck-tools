@@ -5,6 +5,7 @@ import importlib.util
 import inspect
 import ast
 import asyncio
+import logging
 from datetime import datetime
 from typing import Any, Optional
 from fastapi import FastAPI, HTTPException, UploadFile, File
@@ -13,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
 app = FastAPI()
+logger = logging.getLogger(__name__)
 
 # Enable CORS so your frontend can chat with the backend smoothly
 app.add_middleware(
@@ -500,6 +502,7 @@ async def _send_command_to_deck(deck_id: str, host: str, command: str) -> dict:
     except HTTPException as exc:
         return {"name": deck_id, "host": host, "success": False, "response": exc.detail}
     except Exception:
+        logger.exception("Unexpected error sending HyperDeck command to %s", host)
         return {
             "name": deck_id,
             "host": host,
