@@ -25,7 +25,7 @@ async def send_hyperdeck_command(
     if "\r" in command or "\n" in command:
         raise HTTPException(
             status_code=400,
-            detail="HyperDeck commands must not contain line breaks.",
+            detail="HyperDeck command must not contain line breaks.",
         )
 
     try:
@@ -136,7 +136,13 @@ def build_configuration_command(settings: dict) -> list[str]:
         key_clean = key.strip().lower()
         if key_clean not in ALLOWED_KEYS:
             continue
-        value_clean = str(value).replace("\r", " ").replace("\n", " ").strip()
+        value_clean = str(value)
+        if "\r" in value_clean or "\n" in value_clean:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Configuration value for '{key_clean}' must not contain line breaks.",
+            )
+        value_clean = value_clean.strip()
         if value_clean:
             commands.append(f"configuration: {key_clean}: {value_clean}")
     return commands

@@ -499,12 +499,12 @@ async def _send_command_to_deck(deck_id: str, host: str, command: str) -> dict:
         return {"name": deck_id, "host": host, "success": success, "response": response}
     except HTTPException as exc:
         return {"name": deck_id, "host": host, "success": False, "response": exc.detail}
-    except Exception as exc:
+    except Exception:
         return {
             "name": deck_id,
             "host": host,
             "success": False,
-            "response": f"Unexpected communication error: {exc}",
+            "response": "Unexpected communication error.",
         }
 
 
