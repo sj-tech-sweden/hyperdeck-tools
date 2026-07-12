@@ -1177,6 +1177,7 @@ function closeDeckSettings() {
 
 async function saveDeckSettings() {
     if (!activeDeckSettingsHost) return;
+    const requestHost = activeDeckSettingsHost;
     const statusEl = document.getElementById('deck-settings-status');
     const saveBtn = document.getElementById('btn-save-deck-settings');
 
@@ -1202,7 +1203,7 @@ async function saveDeckSettings() {
     if (statusEl) statusEl.innerText = '';
 
     try {
-        const res = await fetch(`/api/control/${encodeURIComponent(activeDeckSettingsHost)}/configuration`, {
+        const res = await fetch(`/api/control/${encodeURIComponent(requestHost)}/configuration`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(settings),
@@ -1222,10 +1223,12 @@ async function saveDeckSettings() {
             // Refresh only the current-values panel by re-fetching configuration.
             // This avoids resetting the selects and reopening the whole modal.
             try {
-                const cfgRes = await fetch(`/api/control/${encodeURIComponent(activeDeckSettingsHost)}/configuration`);
+                const cfgRes = await fetch(`/api/control/${encodeURIComponent(requestHost)}/configuration`);
                 if (cfgRes.ok) {
                     const cfgData = await cfgRes.json();
-                    _renderCurrentSettingsPanel(cfgData.settings || {});
+                    if (activeDeckSettingsHost === requestHost) {
+                        _renderCurrentSettingsPanel(cfgData.settings || {});
+                    }
                 }
             } catch (_) { /* non-critical — stale values are acceptable */ }
         }

@@ -20,8 +20,14 @@ async def send_hyperdeck_command(
     Open a TCP connection to a HyperDeck, discard the initial protocol
     banner, send *command*, and return the response text.
 
-    Raises HTTPException (503 / 504) on connection or timeout errors.
+    Raises HTTPException (400 / 503 / 504) on validation, connection, or timeout errors.
     """
+    if "\r" in command or "\n" in command:
+        raise HTTPException(
+            status_code=400,
+            detail="HyperDeck commands must not contain line breaks.",
+        )
+
     try:
         reader, writer = await asyncio.wait_for(
             asyncio.open_connection(str(host), port), timeout=timeout
@@ -62,6 +68,11 @@ async def send_hyperdeck_command(
         raise HTTPException(
             status_code=503,
             detail=f"Communication error with HyperDeck at {host}:{port}: {exc}",
+        )
+    except (asyncio.IncompleteReadError, asyncio.LimitOverrunError) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Incomplete response from HyperDeck at {host}:{port}: {exc}",
         )
     finally:
         try:
@@ -125,7 +136,7 @@ def build_configuration_command(settings: dict) -> list[str]:
         key_clean = key.strip().lower()
         if key_clean not in ALLOWED_KEYS:
             continue
-        value_clean = str(value).strip()
+        value_clean = str(value).replace("\r", " ").replace("\n", " ").strip()
         if value_clean:
             commands.append(f"configuration: {key_clean}: {value_clean}")
     return commands
