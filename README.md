@@ -22,7 +22,7 @@ A FastAPI + frontend control panel for multi-HyperDeck workflows with:
 
 ## UI Screenshot
 
-![HyperDeck Tools UI](docs/images/Screenshot_11-7-2026_205853_localhost.jpeg)
+![HyperDeck Tools UI](docs/images/Screenshot_13-7-2026_14438_localhost.jpeg)
 
 ## Requirements
 
