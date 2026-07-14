@@ -9,6 +9,7 @@ let currentPluginSelection = '';
 const PLUGIN_SELECTION_STORAGE_KEY = 'hyperdeck.schedulePluginSelection';
 let scheduleSaveDebounceTimer = null;
 let scheduleTempRowCounter = 0;
+let deckSettingsLastFocusedElement = null;
 
 function createTempRowKey() {
     scheduleTempRowCounter += 1;
@@ -110,6 +111,46 @@ function openSiblingPicker(buttonEl, kind) {
     openNativePicker(input);
 }
 
+function insertEventSlateTemplate(buttonEl) {
+    const row = buttonEl.closest('.schedule-row-item');
+    if (!row) return;
+
+    const textarea = row.querySelector('.sch-slate-meta');
+    if (!textarea) return;
+
+    let existing = {};
+    const raw = (textarea.value || '').trim();
+    if (raw) {
+        try {
+            const parsed = JSON.parse(raw);
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                existing = parsed;
+            } else {
+                alert('Per-event slate metadata must be a JSON object.');
+                return;
+            }
+        } catch (_) {
+            alert('Per-event slate metadata must be valid JSON before inserting a template.');
+            return;
+        }
+    }
+
+    // Fill only missing keys so user-entered values are preserved.
+    const template = {
+        'scene id': '',
+        'shot type': 'none',
+        'take': '1',
+        'take scenario': 'none',
+        'take auto inc': 'false',
+        'good take': 'false',
+        'environment': 'interior',
+        'day night': 'day',
+    };
+
+    const merged = { ...template, ...existing };
+    textarea.value = JSON.stringify(merged, null, 2);
+}
+
 function updateAutoModeBadge() {
     const badge = document.getElementById('hud-mode-badge');
     if (!badge) return;
@@ -153,8 +194,21 @@ function getVisibleScheduleRowsFromDOM() {
         const date = el.querySelector('.sch-date')?.value || '';
         const time = el.querySelector('.sch-time')?.value || '';
         const stage = normalizeStageName(el.querySelector('.sch-stage')?.value || '');
+        const slateRaw = el.querySelector('.sch-slate-meta')?.value || '';
         const start_time = date && time ? `${date} ${time}` : (date || time || '');
         const domKey = decodeURIComponent(el.dataset.rowKey || '');
+
+        let slate_metadata = {};
+        if (slateRaw.trim()) {
+            try {
+                const parsed = JSON.parse(slateRaw);
+                if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                    slate_metadata = parsed;
+                }
+            } catch (_) {
+                // Save-time validation handles invalid JSON feedback.
+            }
+        }
 
         let resolvedId = id;
         if (!resolvedId && start_time) {
@@ -169,6 +223,7 @@ function getVisibleScheduleRowsFromDOM() {
             planned_title: plannedTitle,
             start_time,
             stage,
+            slate_metadata,
         });
     });
     return rows;
@@ -186,6 +241,7 @@ function mergeVisibleRowsIntoCache() {
             planned_title: row.planned_title,
             start_time: row.start_time,
             stage: row.stage,
+            slate_metadata: row.slate_metadata || {},
         };
         const rowKey = row._key || row._row_key || scheduleItemKey(candidate);
         if (!rowKey) {
@@ -273,12 +329,109 @@ function ensureConfigShape(config) {
     if (!safe.destinations || !Array.isArray(safe.destinations)) safe.destinations = [];
     if (!safe.hyperdecks || typeof safe.hyperdecks !== 'object') safe.hyperdecks = {};
     if (!safe.deck_stages || typeof safe.deck_stages !== 'object') safe.deck_stages = {};
+    if (!safe.slate_metadata || typeof safe.slate_metadata !== 'object') safe.slate_metadata = {};
+    if (!safe.slate_metadata.global || typeof safe.slate_metadata.global !== 'object') safe.slate_metadata.global = {};
+    if (!safe.slate_metadata.per_deck || typeof safe.slate_metadata.per_deck !== 'object') safe.slate_metadata.per_deck = {};
+    if (!safe.slate_metadata.per_event || typeof safe.slate_metadata.per_event !== 'object') safe.slate_metadata.per_event = {};
     if (!safe.stage_mode || !['global', 'per_deck'].includes(safe.stage_mode)) safe.stage_mode = 'global';
     if (typeof safe.global_stage !== 'string') safe.global_stage = '';
     if (typeof safe.schedule_auto_mode !== 'boolean') safe.schedule_auto_mode = true;
     if (typeof safe.schedule_max_drift_minutes !== 'number') safe.schedule_max_drift_minutes = 45;
     if (typeof safe.filename_template !== 'string') safe.filename_template = '{year}{month}{day}_{planned_title}';
     return safe;
+}
+
+function readJsonObjectField(fieldId, label) {
+    const el = document.getElementById(fieldId);
+    if (!el) return {};
+    const raw = (el.value || '').trim();
+    if (!raw) return {};
+
+    let parsed;
+    try {
+        parsed = JSON.parse(raw);
+    } catch (_) {
+        throw new Error(`${label} must be valid JSON.`);
+    }
+
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error(`${label} must be a JSON object.`);
+    }
+    return parsed;
+}
+
+function insertSlateGlobalTemplate() {
+    const textarea = document.getElementById('cfg-slate-global');
+    if (!textarea) return;
+
+    let existing = {};
+    const raw = (textarea.value || '').trim();
+    if (raw) {
+        try {
+            const parsed = JSON.parse(raw);
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                existing = parsed;
+            } else {
+                alert('Slate global metadata must be a JSON object.');
+                return;
+            }
+        } catch (_) {
+            alert('Slate global metadata must be valid JSON before inserting a template.');
+            return;
+        }
+    }
+
+    const template = {
+        'project name': 'Production Name',
+        'director': 'Director Name',
+        'camera operator': '',
+    };
+    textarea.value = JSON.stringify({ ...template, ...existing }, null, 2);
+}
+
+function insertSlatePerDeckTemplate() {
+    const textarea = document.getElementById('cfg-slate-per-deck');
+    if (!textarea) return;
+
+    let existing = {};
+    const raw = (textarea.value || '').trim();
+    if (raw) {
+        try {
+            const parsed = JSON.parse(raw);
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                existing = parsed;
+            } else {
+                alert('Slate per-deck metadata must be a JSON object.');
+                return;
+            }
+        } catch (_) {
+            alert('Slate per-deck metadata must be valid JSON before inserting a template.');
+            return;
+        }
+    }
+
+    const defaultDeckTemplate = {
+        MainDeck: {
+            camera: 'A',
+            'camera operator': '',
+        },
+        YouthDeck: {
+            camera: 'B',
+            'camera operator': '',
+        },
+    };
+
+    // Merge per deck while preserving user values where already present.
+    const merged = { ...defaultDeckTemplate, ...existing };
+    Object.keys(defaultDeckTemplate).forEach((deckKey) => {
+        const deckTemplate = defaultDeckTemplate[deckKey];
+        const current = merged[deckKey];
+        if (current && typeof current === 'object' && !Array.isArray(current)) {
+            merged[deckKey] = { ...deckTemplate, ...current };
+        }
+    });
+
+    textarea.value = JSON.stringify(merged, null, 2);
 }
 
 function updateStageModeUI() {
@@ -381,6 +534,10 @@ async function updateDashboardMetrics() {
                         class="flex-1 rounded bg-slate-700 hover:bg-slate-600 px-2 py-1.5 text-xs font-semibold text-white transition cursor-pointer">
                         ⏹ Stop
                     </button>
+                    <button type="button" onclick="openDeckRecordings(${jsIpAttr}, ${jsNameAttr})"
+                        class="rounded bg-slate-800 hover:bg-slate-700 px-2 py-1.5 text-xs text-slate-300 hover:text-white transition cursor-pointer" aria-label="Deck recordings">
+                        📼
+                    </button>
                     <button type="button" onclick="openDeckSettings(${jsIpAttr}, ${jsNameAttr})"
                         class="rounded bg-slate-800 hover:bg-slate-700 px-2 py-1.5 text-xs text-slate-300 hover:text-white transition cursor-pointer" aria-label="Deck settings">
                         ⚙
@@ -402,6 +559,10 @@ async function pullConfigurationMatrix() {
         document.getElementById('cfg-global-stage').value = localConfigCache.global_stage;
         document.getElementById('cfg-auto-mode').value = localConfigCache.schedule_auto_mode ? 'true' : 'false';
         document.getElementById('cfg-drift-minutes').value = localConfigCache.schedule_max_drift_minutes;
+        document.getElementById('cfg-slate-global').value = JSON.stringify(localConfigCache.slate_metadata.global || {}, null, 2);
+        document.getElementById('cfg-slate-per-deck').value = JSON.stringify(localConfigCache.slate_metadata.per_deck || {}, null, 2);
+        const slateStatus = document.getElementById('cfg-slate-status');
+        if (slateStatus) slateStatus.innerText = 'Slate metadata is optional.';
 
         const stageModeSelect = document.getElementById('cfg-stage-mode');
         if (!stageModeSelect.dataset.bound) {
@@ -484,6 +645,18 @@ async function saveConfigToServer() {
     const global_stage = document.getElementById('cfg-global-stage').value.trim();
     const schedule_auto_mode = document.getElementById('cfg-auto-mode').value === 'true';
     const schedule_max_drift_minutes = Number.parseInt(document.getElementById('cfg-drift-minutes').value || '45', 10);
+    const slateStatus = document.getElementById('cfg-slate-status');
+
+    let slateGlobal = {};
+    let slatePerDeck = {};
+    try {
+        slateGlobal = readJsonObjectField('cfg-slate-global', 'Slate global metadata');
+        slatePerDeck = readJsonObjectField('cfg-slate-per-deck', 'Slate per-deck metadata');
+    } catch (e) {
+        if (slateStatus) slateStatus.innerText = e.message;
+        alert(e.message);
+        return;
+    }
     
     const destinations = [];
     document.querySelectorAll('.row-destination-item').forEach(el => {
@@ -512,6 +685,11 @@ async function saveConfigToServer() {
         deck_stages,
         schedule_auto_mode,
         schedule_max_drift_minutes: Number.isFinite(schedule_max_drift_minutes) ? Math.max(0, schedule_max_drift_minutes) : 45,
+        slate_metadata: {
+            global: slateGlobal,
+            per_deck: slatePerDeck,
+            per_event: {},
+        },
     };
     try {
         const res = await fetch('/api/config', {
@@ -521,6 +699,7 @@ async function saveConfigToServer() {
         });
         if(res.ok) {
             alert('Configuration updated and reloaded cleanly!');
+            if (slateStatus) slateStatus.innerText = 'Slate metadata saved.';
             pullConfigurationMatrix();
         }
     } catch (e) { alert("Error trying to commit target configurations modifications."); }
@@ -692,9 +871,21 @@ async function selectActiveEventContext(id, plannedTitle) {
                 const schDate = el.querySelector('.sch-date')?.value || '';
                 const schTime = el.querySelector('.sch-time')?.value || '';
                 const schStage = el.querySelector('.sch-stage')?.value || '';
+                let schSlateMetadata = {};
+                const schSlateRaw = el.querySelector('.sch-slate-meta')?.value || '';
+                if (schSlateRaw.trim()) {
+                    try {
+                        const parsed = JSON.parse(schSlateRaw);
+                        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                            schSlateMetadata = parsed;
+                        }
+                    } catch (_) {
+                        schSlateMetadata = {};
+                    }
+                }
                 const schStart = schDate && schTime ? `${schDate} ${schTime}` : '';
                 if (schId || schTitle || schStart) {
-                    currentItems.push({ id: schId, planned_title: schTitle, start_time: schStart, stage: schStage });
+                    currentItems.push({ id: schId, planned_title: schTitle, start_time: schStart, stage: schStage, slate_metadata: schSlateMetadata });
                 }
             });
             renderScheduleMatrix(currentItems);
@@ -710,6 +901,7 @@ function createScheduleRowElement(item = { id: '', planned_title: '' }) {
     const startTime = (item.start_time || '').trim();
     const { datePart, timePart } = splitStartTimeParts(startTime);
     const stage = normalizeStageName(item.stage);
+    const slateMetadataText = JSON.stringify(item.slate_metadata || {}, null, 2);
     const inScope = isScheduleItemInScope(item);
     const stableRowKey = item._row_key || scheduleItemKey(item) || createTempRowKey();
     const rowKey = encodeURIComponent(stableRowKey);
@@ -749,6 +941,15 @@ function createScheduleRowElement(item = { id: '', planned_title: '' }) {
                 <span class="block">Stage ${hintBadge('Optional. Leave blank to match regardless of stage.')}</span>
                 <input type="text" list="cfg-stage-options" title="Optional. Leave blank to match regardless of stage." placeholder="Main Stage" value="${stage}" class="sch-stage block w-full rounded border border-slate-800 bg-slate-950 px-2 py-1 text-[11px] text-slate-200 focus:outline-none">
             </label>
+        </div>
+        <div class="mt-2">
+            <label class="text-[10px] text-slate-400 space-y-1 block">
+                <span class="block">Per-Event Slate Metadata (JSON) ${hintBadge('Optional JSON object used when this event is matched during record.')}</span>
+                <textarea class="sch-slate-meta block w-full rounded border border-slate-800 bg-slate-950 px-2 py-1.5 text-[11px] font-mono text-slate-200 focus:outline-none" rows="3" spellcheck="false" placeholder='{"scene id":"OPN","day night":"day"}'>${escHtml(slateMetadataText)}</textarea>
+            </label>
+            <div class="mt-1 flex justify-end">
+                <button type="button" onclick="insertEventSlateTemplate(this)" class="text-[10px] text-indigo-400 hover:text-indigo-300 font-medium cursor-pointer">Insert Slate Template</button>
+            </div>
         </div>
         <div class="mt-2 flex items-center gap-1.5">
             <span class="text-[10px] ${inScope ? 'text-emerald-300' : 'text-slate-500'}">${inScope ? 'IN SCOPE' : 'OUT OF SCOPE'}</span>
@@ -825,11 +1026,42 @@ function renderScheduleMatrix(schedule = [], preserveCache = false) {
 
 async function saveScheduleFromMatrix() {
     mergeVisibleRowsIntoCache();
+    const syncStatus = document.getElementById('plugin-sync-status');
+
+    // Validate per-event JSON blobs before sending to backend.
+    for (const rowEl of document.querySelectorAll('.schedule-row-item')) {
+        const slateField = rowEl.querySelector('.sch-slate-meta');
+        if (!slateField) continue;
+
+        const raw = (slateField.value || '').trim();
+        if (!raw) {
+            slateField.classList.remove('ring-1', 'ring-rose-500');
+            continue;
+        }
+
+        try {
+            const parsed = JSON.parse(raw);
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+                throw new Error('not object');
+            }
+            slateField.classList.remove('ring-1', 'ring-rose-500');
+        } catch (_) {
+            slateField.classList.add('ring-1', 'ring-rose-500');
+            if (syncStatus) {
+                syncStatus.innerText = 'Schedule not saved: each Per-Event Slate Metadata field must contain a JSON object.';
+            }
+            return;
+        }
+    }
+
     const normalizedRows = scheduleDataCache
         .map((row, idx) => {
             const plannedTitle = (row.planned_title || '').trim();
             const start_time = (row.start_time || '').trim();
             const stage = normalizeStageName(row.stage);
+            const slate_metadata = (row.slate_metadata && typeof row.slate_metadata === 'object' && !Array.isArray(row.slate_metadata))
+                ? row.slate_metadata
+                : {};
             let id = (row.id || '').trim();
             const stableKey = (row._row_key || row._key || scheduleItemKey(row) || createTempRowKey()).toString();
 
@@ -837,12 +1069,12 @@ async function saveScheduleFromMatrix() {
                 const safeTitle = (plannedTitle || `event_${idx + 1}`).replace(/\s+/g, '_').replace(/[^\w\-]/g, '').toLowerCase();
                 id = `${start_time}_${safeTitle}`;
             }
-            return { _row_key: stableKey, id, planned_title: plannedTitle, start_time, stage };
+            return { _row_key: stableKey, id, planned_title: plannedTitle, start_time, stage, slate_metadata };
         })
         .filter(row => row.id || row.planned_title || row.start_time);
 
     scheduleDataCache = normalizedRows;
-    const payload = normalizedRows.map(({ id, planned_title, start_time, stage }) => ({ id, planned_title, start_time, stage }));
+    const payload = normalizedRows.map(({ id, planned_title, start_time, stage, slate_metadata }) => ({ id, planned_title, start_time, stage, slate_metadata }));
 
     await fetch('/api/schedule', {
         method: 'POST',
@@ -852,7 +1084,6 @@ async function saveScheduleFromMatrix() {
 
     renderScheduleMatrix(scheduleDataCache, true);
 
-    const syncStatus = document.getElementById('plugin-sync-status');
     if (!currentPluginSelection) {
         const descriptionEl = document.getElementById('plugin-description');
         descriptionEl.innerText = 'Manual mode active. Rows below are maintained by hand.';
@@ -886,6 +1117,7 @@ function addManualScheduleRow() {
         planned_title: '',
         start_time: '',
         stage: '',
+        slate_metadata: {},
     });
     renderScheduleMatrix(scheduleDataCache, true);
 }
@@ -1112,16 +1344,464 @@ async function sendCommandToAll(command) {
 // --- Deck Settings Modal ---
 
 let activeDeckSettingsHost = '';
+let activeDeckRecordingsHost = '';
+let deckRecordingsLastFocusedElement = null;
+let pendingDeckFormatRequest = null;
+let deckFormatProgressInterval = null;
+
+function setDeckFormatControlsDisabled(disabled) {
+    const ids = ['ds-format-slot', 'ds-format-filesystem', 'ds-format-name', 'btn-deck-format-card'];
+    ids.forEach((id) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.disabled = !!disabled;
+    });
+}
+
+function startDeckFormatProgress(statusEl) {
+    if (!statusEl) return () => {};
+
+    if (deckFormatProgressInterval) {
+        clearInterval(deckFormatProgressInterval);
+        deckFormatProgressInterval = null;
+    }
+
+    const startedAt = Date.now();
+    const render = () => {
+        const elapsed = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+        statusEl.innerText = `Formatting card on deck... ${elapsed}s elapsed (this can take up to ~60s).`;
+    };
+
+    render();
+    deckFormatProgressInterval = setInterval(render, 1000);
+
+    return () => {
+        if (deckFormatProgressInterval) {
+            clearInterval(deckFormatProgressInterval);
+            deckFormatProgressInterval = null;
+        }
+    };
+}
+
+function setDeckSettingSelectOptions(selectId, values = []) {
+    const select = document.getElementById(selectId);
+    if (!select) return;
+
+    const normalized = [];
+    const normalizedLower = new Set();
+    values.forEach(value => {
+        const clean = String(value || '').trim();
+        const key = clean.toLowerCase();
+        if (clean && !normalizedLower.has(key)) {
+            normalized.push(clean);
+            normalizedLower.add(key);
+        }
+    });
+
+    select.innerHTML = '<option value="">— unchanged —</option>';
+    normalized.forEach(value => {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = value;
+        select.appendChild(option);
+    });
+}
+
+function applyDeckSettingOptions(options = {}) {
+    const fieldMap = {
+        'file format': 'ds-file-format',
+        'video input': 'ds-video-input',
+        'audio input': 'ds-audio-input',
+        'audio codec': 'ds-audio-codec',
+        'default standard': 'ds-default-standard',
+    };
+    Object.entries(fieldMap).forEach(([key, selectId]) => {
+        setDeckSettingSelectOptions(selectId, Array.isArray(options[key]) ? options[key] : []);
+    });
+}
+
+function setDeckSettingsInputValue(inputId, value) {
+    const el = document.getElementById(inputId);
+    if (!el) return;
+    el.value = (value ?? '').toString();
+}
+
+async function loadDeckFormatSlotOptions(host) {
+    const slotSelect = document.getElementById('ds-format-slot');
+    if (!slotSelect) return;
+
+    const previous = slotSelect.value || '1';
+    slotSelect.innerHTML = '';
+    try {
+        const res = await fetch(`/api/control/${encodeURIComponent(host)}/slots`);
+        let data;
+        try { data = await res.json(); } catch (_) { data = {}; }
+        const slots = Array.isArray(data.slots) && data.slots.length > 0 ? data.slots : ['1'];
+        slots.forEach((slot) => {
+            const option = document.createElement('option');
+            option.value = String(slot);
+            option.textContent = String(slot);
+            slotSelect.appendChild(option);
+        });
+        slotSelect.value = slots.includes(previous) ? previous : String(slots[0]);
+    } catch (_) {
+        ['1', '2'].forEach((slot) => {
+            const option = document.createElement('option');
+            option.value = slot;
+            option.textContent = slot;
+            slotSelect.appendChild(option);
+        });
+        slotSelect.value = previous || '1';
+    }
+}
+
+function formatDeckCard() {
+    if (!activeDeckSettingsHost) return;
+    const slotEl = document.getElementById('ds-format-slot');
+    const fsEl = document.getElementById('ds-format-filesystem');
+    const nameEl = document.getElementById('ds-format-name');
+    const statusEl = document.getElementById('deck-format-status');
+    if (!slotEl || !fsEl || !statusEl) return;
+
+    const slotId = (slotEl.value || '1').trim() || '1';
+    const filesystem = (fsEl.value || 'exFAT').trim() || 'exFAT';
+    const volumeName = (nameEl?.value || '').trim();
+
+    pendingDeckFormatRequest = {
+        host: activeDeckSettingsHost,
+        slotId,
+        filesystem,
+        volumeName,
+    };
+
+    const summaryEl = document.getElementById('deck-format-confirm-summary');
+    if (summaryEl) {
+        const namePart = volumeName ? `, volume name '${volumeName}'` : '';
+        summaryEl.innerText = `Format slot ${slotId} as ${filesystem}${namePart}.`;
+    }
+
+    const checkbox = document.getElementById('deck-format-confirm-checkbox');
+    const confirmBtn = document.getElementById('btn-confirm-deck-format');
+    if (checkbox) checkbox.checked = false;
+    if (confirmBtn) {
+        confirmBtn.disabled = true;
+        confirmBtn.classList.add('cursor-not-allowed');
+        confirmBtn.classList.remove('cursor-pointer', 'hover:bg-rose-600', 'hover:text-white');
+    }
+
+    if (checkbox && !checkbox.dataset.bound) {
+        checkbox.addEventListener('change', () => {
+            const btn = document.getElementById('btn-confirm-deck-format');
+            if (!btn) return;
+            btn.disabled = !checkbox.checked;
+            if (checkbox.checked) {
+                btn.classList.remove('cursor-not-allowed');
+                btn.classList.add('cursor-pointer', 'hover:bg-rose-600', 'hover:text-white');
+            } else {
+                btn.classList.add('cursor-not-allowed');
+                btn.classList.remove('cursor-pointer', 'hover:bg-rose-600', 'hover:text-white');
+            }
+        });
+        checkbox.dataset.bound = 'true';
+    }
+
+    const modal = document.getElementById('deck-format-confirm-modal');
+    modal?.classList.remove('hidden');
+}
+
+function closeDeckFormatConfirmDialog() {
+    const modal = document.getElementById('deck-format-confirm-modal');
+    if (modal) modal.classList.add('hidden');
+}
+
+function handleDeckFormatConfirmBackdropClick(event) {
+    const modal = document.getElementById('deck-format-confirm-modal');
+    if (!modal) return;
+    if (event.target === modal) closeDeckFormatConfirmDialog();
+}
+
+async function confirmDeckFormatAction() {
+    if (!pendingDeckFormatRequest) return;
+
+    const statusEl = document.getElementById('deck-format-status');
+    const btn = document.getElementById('btn-deck-format-card');
+    const confirmBtn = document.getElementById('btn-confirm-deck-format');
+    const { host, slotId, filesystem, volumeName } = pendingDeckFormatRequest;
+
+    closeDeckFormatConfirmDialog();
+
+    const stopProgress = startDeckFormatProgress(statusEl);
+    setDeckFormatControlsDisabled(true);
+    if (btn) {
+        btn.disabled = true;
+        btn.innerText = 'Formatting…';
+    }
+    if (confirmBtn) confirmBtn.disabled = true;
+
+    pendingDeckFormatRequest = null;
+
+    try {
+        const res = await fetch(`/api/control/${encodeURIComponent(host)}/format-card`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                slot_id: slotId,
+                filesystem,
+                volume_name: volumeName,
+                confirm_text: 'FORMAT',
+            }),
+        });
+
+        let data;
+        try { data = await res.json(); } catch (_) { data = {}; }
+
+        if (!res.ok) {
+            const detail = typeof data.detail === 'string'
+                ? data.detail
+                : (data.detail?.message || 'Unknown error');
+            let suffix = '';
+            if (data.detail && typeof data.detail === 'object') {
+                if (Array.isArray(data.detail.attempts) && data.detail.attempts.length > 0) {
+                    const first = data.detail.attempts[0] || {};
+                    suffix = ` First response: ${String(first.response || '').slice(0, 120)}`;
+                }
+            }
+            if (statusEl) statusEl.innerText = `Format failed: ${detail}${suffix}`;
+            return;
+        }
+
+        if (statusEl) {
+            const confirmResponse = String(data.response || '').trim();
+            const responseSuffix = confirmResponse ? ` Response: ${confirmResponse}` : '';
+            statusEl.innerText = `Format completed for slot ${slotId} (${filesystem}).${responseSuffix}`;
+        }
+    } catch (_) {
+        if (statusEl) statusEl.innerText = 'Format failed: Could not reach backend API.';
+    } finally {
+        stopProgress();
+        setDeckFormatControlsDisabled(false);
+        if (btn) {
+            btn.disabled = false;
+            btn.innerText = 'Format Card';
+        }
+        if (confirmBtn) confirmBtn.disabled = false;
+    }
+}
+
+function formatBytes(bytes) {
+    const size = Number(bytes || 0);
+    if (!Number.isFinite(size) || size <= 0) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    let idx = 0;
+    let value = size;
+    while (value >= 1024 && idx < units.length - 1) {
+        value /= 1024;
+        idx += 1;
+    }
+    return `${value.toFixed(value >= 100 || idx === 0 ? 0 : 1)} ${units[idx]}`;
+}
+
+function formatDeckModified(value) {
+    const raw = String(value || '').trim();
+    if (!raw || !/^\d{14}$/.test(raw)) return raw;
+    return `${raw.slice(0, 4)}-${raw.slice(4, 6)}-${raw.slice(6, 8)} ${raw.slice(8, 10)}:${raw.slice(10, 12)}:${raw.slice(12, 14)}`;
+}
+
+async function loadDeckRecordingsList() {
+    if (!activeDeckRecordingsHost) return;
+    const listEl = document.getElementById('deck-recordings-list');
+    const statusEl = document.getElementById('deck-recordings-status');
+    const slotEl = document.getElementById('drm-slot');
+    const loadBtn = document.getElementById('btn-drm-refresh');
+    if (!listEl || !statusEl || !slotEl || !loadBtn) return;
+
+    const slotId = (slotEl.value || '1').trim() || '1';
+    loadBtn.disabled = true;
+    loadBtn.innerText = 'Loading…';
+    listEl.innerHTML = '<div class="text-[11px] text-slate-500 px-2 py-2">Loading recordings…</div>';
+    statusEl.innerText = '';
+
+    try {
+        const res = await fetch(`/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/recordings?slot_id=${encodeURIComponent(slotId)}`);
+        let data;
+        try { data = await res.json(); } catch (_) { data = {}; }
+
+        if (!res.ok) {
+            statusEl.innerText = `Could not load recordings: ${data.detail || 'Unknown error'}`;
+            listEl.innerHTML = '<div class="text-[11px] text-rose-400 px-2 py-2">Failed to load recordings.</div>';
+            return;
+        }
+
+        const recordings = Array.isArray(data.recordings) ? data.recordings : [];
+        if (recordings.length === 0) {
+            listEl.innerHTML = '<div class="text-[11px] text-slate-500 px-2 py-2">No recordings found in this slot.</div>';
+            statusEl.innerText = 'No transferable recordings found.';
+            return;
+        }
+
+        listEl.innerHTML = '';
+        recordings.forEach((item) => {
+            const row = document.createElement('div');
+            row.className = 'grid grid-cols-12 gap-2 items-center px-2 py-2 border-b border-slate-800 last:border-b-0 text-[11px]';
+
+            const name = String(item.name || '');
+            const size = formatBytes(item.size || 0);
+            const modified = formatDeckModified(item.modified || '');
+
+            const nameEl = document.createElement('div');
+            nameEl.className = 'col-span-6 text-slate-200 truncate';
+            nameEl.title = name;
+            nameEl.textContent = name;
+
+            const metaEl = document.createElement('div');
+            metaEl.className = 'col-span-4 text-slate-500 truncate';
+            metaEl.title = modified ? `${size} · ${modified}` : size;
+            metaEl.textContent = modified ? `${size} · ${modified}` : size;
+
+            const btnWrap = document.createElement('div');
+            btnWrap.className = 'col-span-2 flex justify-end';
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'text-[10px] bg-indigo-600/20 text-indigo-300 border border-indigo-500/30 rounded px-2 py-1 hover:bg-indigo-600 hover:text-white transition cursor-pointer';
+            btn.textContent = 'Transfer';
+            btn.addEventListener('click', () => transferDeckRecording(name));
+            btnWrap.appendChild(btn);
+
+            row.appendChild(nameEl);
+            row.appendChild(metaEl);
+            row.appendChild(btnWrap);
+            listEl.appendChild(row);
+        });
+
+        statusEl.innerText = `${recordings.length} recording(s) available in slot ${slotId}.`;
+    } catch (_) {
+        listEl.innerHTML = '<div class="text-[11px] text-rose-400 px-2 py-2">Could not reach backend API.</div>';
+        statusEl.innerText = 'Failed to load recordings.';
+    } finally {
+        loadBtn.disabled = false;
+        loadBtn.innerText = 'Refresh';
+    }
+}
+
+async function transferDeckRecording(remoteFilename) {
+    if (!activeDeckRecordingsHost) return;
+    const statusEl = document.getElementById('deck-recordings-status');
+    const slotEl = document.getElementById('drm-slot');
+    const slotId = (slotEl?.value || '1').trim() || '1';
+
+    if (statusEl) statusEl.innerText = `Transferring ${remoteFilename}...`;
+    try {
+        const res = await fetch(`/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/transfer-recording`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ slot_id: slotId, remote_filename: remoteFilename }),
+        });
+        let data;
+        try { data = await res.json(); } catch (_) { data = {}; }
+
+        if (!res.ok) {
+            if (statusEl) statusEl.innerText = `Transfer failed: ${data.detail || 'Unknown error'}`;
+            return;
+        }
+
+        if (statusEl) statusEl.innerText = `Transfer started/completed: ${data.local_filename || remoteFilename}`;
+        updateDashboardMetrics();
+    } catch (_) {
+        if (statusEl) statusEl.innerText = 'Transfer failed: Could not reach backend API.';
+    }
+}
+
+async function loadDeckSlotOptions() {
+    if (!activeDeckRecordingsHost) return;
+    const slotSelect = document.getElementById('drm-slot');
+    const statusEl = document.getElementById('deck-recordings-status');
+    if (!slotSelect) return;
+
+    const previous = slotSelect.value || '1';
+    slotSelect.innerHTML = '';
+    try {
+        const res = await fetch(`/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/slots`);
+        let data;
+        try { data = await res.json(); } catch (_) { data = {}; }
+        const slots = Array.isArray(data.slots) && data.slots.length > 0 ? data.slots : ['1'];
+        slots.forEach((slot) => {
+            const option = document.createElement('option');
+            option.value = String(slot);
+            option.textContent = String(slot);
+            slotSelect.appendChild(option);
+        });
+        slotSelect.value = slots.includes(previous) ? previous : String(slots[0]);
+    } catch (_) {
+        ['1', '2'].forEach((slot) => {
+            const option = document.createElement('option');
+            option.value = slot;
+            option.textContent = slot;
+            slotSelect.appendChild(option);
+        });
+        slotSelect.value = previous || '1';
+        if (statusEl) statusEl.innerText = 'Could not query slot list from deck. Using fallback slots.';
+    }
+}
+
+async function openDeckRecordings(host, name) {
+    activeDeckRecordingsHost = host;
+    deckRecordingsLastFocusedElement = document.activeElement;
+
+    const modal = document.getElementById('deck-recordings-modal');
+    const hostLabel = document.getElementById('deck-recordings-host');
+    const listEl = document.getElementById('deck-recordings-list');
+    const statusEl = document.getElementById('deck-recordings-status');
+    const closeBtn = modal ? modal.querySelector('button[aria-label="Close deck recordings"]') : null;
+    if (!modal || !hostLabel || !listEl || !statusEl) return;
+
+    hostLabel.innerText = `${name} — ${host}`;
+    listEl.innerHTML = '<div class="text-[11px] text-slate-500 px-2 py-2">Loading recordings…</div>';
+    statusEl.innerText = '';
+
+    modal.classList.remove('hidden');
+    document.body.classList.add('overflow-hidden');
+    if (closeBtn) closeBtn.focus();
+
+    await loadDeckSlotOptions();
+    await loadDeckRecordingsList();
+}
+
+function closeDeckRecordings() {
+    const modal = document.getElementById('deck-recordings-modal');
+    if (modal) modal.classList.add('hidden');
+    document.body.classList.remove('overflow-hidden');
+    activeDeckRecordingsHost = '';
+    if (deckRecordingsLastFocusedElement && typeof deckRecordingsLastFocusedElement.focus === 'function') {
+        deckRecordingsLastFocusedElement.focus();
+    }
+    deckRecordingsLastFocusedElement = null;
+}
+
+function isDeckRecordingsOpen() {
+    const modal = document.getElementById('deck-recordings-modal');
+    return !!modal && !modal.classList.contains('hidden');
+}
+
+function handleDeckRecordingsBackdropClick(event) {
+    const modal = document.getElementById('deck-recordings-modal');
+    if (!modal) return;
+    if (event.target === modal) closeDeckRecordings();
+}
 
 async function openDeckSettings(host, name) {
     activeDeckSettingsHost = host;
+    deckSettingsLastFocusedElement = document.activeElement;
     const modal = document.getElementById('deck-settings-modal');
+    const closeBtn = modal ? modal.querySelector('button[aria-label="Close deck settings"]') : null;
     const hostLabel = document.getElementById('deck-settings-host');
     const loadingEl = document.getElementById('deck-settings-loading');
     const formEl = document.getElementById('deck-settings-form');
     const errorEl = document.getElementById('deck-settings-error');
     const saveBtn = document.getElementById('btn-save-deck-settings');
     const statusEl = document.getElementById('deck-settings-status');
+    const sourceEl = document.getElementById('deck-settings-options-source');
+    const debugEl = document.getElementById('deck-settings-debug');
+    const debugBtn = document.getElementById('btn-deck-settings-debug');
 
     hostLabel.innerText = `${name} — ${host}`;
     loadingEl.classList.remove('hidden');
@@ -1129,10 +1809,41 @@ async function openDeckSettings(host, name) {
     errorEl.classList.add('hidden');
     saveBtn.classList.add('hidden');
     if (statusEl) statusEl.innerText = '';
+    if (sourceEl) sourceEl.innerText = 'Options source: —';
+    if (debugEl) debugEl.innerText = 'No diagnostics loaded.';
+    if (debugBtn) {
+        debugBtn.disabled = false;
+        debugBtn.innerText = 'Load Debug';
+    }
+    const formatStatusEl = document.getElementById('deck-format-status');
+    if (formatStatusEl) formatStatusEl.innerText = '';
+    const formatNameEl = document.getElementById('ds-format-name');
+    if (formatNameEl) formatNameEl.value = '';
     modal.classList.remove('hidden');
+    document.body.classList.add('overflow-hidden');
+    if (closeBtn) closeBtn.focus();
 
     // Reset selects to "unchanged"
-    ['ds-file-format', 'ds-video-input', 'ds-audio-input', 'ds-audio-codec'].forEach(id => {
+    [
+        'ds-file-format',
+        'ds-video-input',
+        'ds-audio-input',
+        'ds-audio-codec',
+        'ds-default-standard',
+        'ds-slate-reel',
+        'ds-scene-id',
+        'ds-shot-type',
+        'ds-take',
+        'ds-take-scenario',
+        'ds-take-auto-inc',
+        'ds-good-take',
+        'ds-environment',
+        'ds-day-night',
+        'ds-project-name',
+        'ds-camera',
+        'ds-director',
+        'ds-camera-operator',
+    ].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.value = '';
     });
@@ -1151,6 +1862,19 @@ async function openDeckSettings(host, name) {
         }
 
         const settings = data.settings || {};
+        applyDeckSettingOptions(data.options || {});
+        if (sourceEl) {
+            const optionsSource = data.options_source === 'device'
+                ? 'device-reported'
+                : (data.options_source === 'device+model'
+                    ? 'device + model profile fallback'
+                    : (data.options_source === 'device_partial'
+                        ? 'device-reported (partial enumeration)'
+                        : (data.options_source === 'model_profile'
+                            ? 'model profile fallback'
+                            : 'current-values-only (no option list returned by device)')));
+            sourceEl.innerText = `Options source: ${optionsSource} · Current values: device-reported`;
+        }
         _renderCurrentSettingsPanel(settings);
 
         // Pre-fill selects with current values if they match an option
@@ -1159,6 +1883,7 @@ async function openDeckSettings(host, name) {
             'video input': 'ds-video-input',
             'audio input': 'ds-audio-input',
             'audio codec': 'ds-audio-codec',
+            'default standard': 'ds-default-standard',
         };
         Object.entries(fieldMap).forEach(([settingKey, elId]) => {
             const val = settings[settingKey];
@@ -1169,8 +1894,28 @@ async function openDeckSettings(host, name) {
             select.value = optionExists ? val : '';
         });
 
+        const extraFieldMap = {
+            'reel': 'ds-slate-reel',
+            'scene id': 'ds-scene-id',
+            'shot type': 'ds-shot-type',
+            'take': 'ds-take',
+            'take scenario': 'ds-take-scenario',
+            'take auto inc': 'ds-take-auto-inc',
+            'good take': 'ds-good-take',
+            'environment': 'ds-environment',
+            'day night': 'ds-day-night',
+            'project name': 'ds-project-name',
+            'camera': 'ds-camera',
+            'director': 'ds-director',
+            'camera operator': 'ds-camera-operator',
+        };
+        Object.entries(extraFieldMap).forEach(([settingKey, inputId]) => {
+            setDeckSettingsInputValue(inputId, settings[settingKey] || '');
+        });
+
         formEl.classList.remove('hidden');
         saveBtn.classList.remove('hidden');
+        await loadDeckFormatSlotOptions(host);
     } catch (e) {
         loadingEl.classList.add('hidden');
         errorEl.innerText = `Could not reach backend API for ${host}.`;
@@ -1178,10 +1923,127 @@ async function openDeckSettings(host, name) {
     }
 }
 
+async function loadDeckSettingsDebug() {
+    if (!activeDeckSettingsHost) return;
+    const debugEl = document.getElementById('deck-settings-debug');
+    const debugBtn = document.getElementById('btn-deck-settings-debug');
+    if (!debugEl || !debugBtn) return;
+
+    debugBtn.disabled = true;
+    debugBtn.innerText = 'Loading…';
+    debugEl.innerText = 'Loading diagnostics from device probes...';
+
+    try {
+        const res = await fetch(`/api/control/${encodeURIComponent(activeDeckSettingsHost)}/configuration?debug=true`);
+        let data;
+        try { data = await res.json(); } catch (_) { data = {}; }
+
+        if (!res.ok) {
+            debugEl.innerText = `Debug fetch failed: ${data.detail || 'Unknown error'}`;
+            return;
+        }
+
+        const probes = Array.isArray(data.probes) ? data.probes : [];
+        if (probes.length === 0) {
+            debugEl.innerText = 'No probe output returned.';
+            return;
+        }
+
+        const blocks = probes.map((probe) => {
+            const cmd = String(probe.command || '');
+            const code = String(probe.code ?? '');
+            const ok = probe.success ? 'OK' : 'FAIL';
+            const status = String(probe.status || '');
+            const response = String(probe.response || '');
+            return `> ${cmd}\n[${ok}] code=${code} status=${status}\n${response}`;
+        });
+        debugEl.innerText = blocks.join('\n\n');
+    } catch (e) {
+        debugEl.innerText = 'Debug fetch failed: Could not reach backend API.';
+    } finally {
+        debugBtn.disabled = false;
+        debugBtn.innerText = 'Reload Debug';
+    }
+}
+
 function closeDeckSettings() {
     document.getElementById('deck-settings-modal').classList.add('hidden');
+    document.body.classList.remove('overflow-hidden');
     activeDeckSettingsHost = '';
+    if (deckSettingsLastFocusedElement && typeof deckSettingsLastFocusedElement.focus === 'function') {
+        deckSettingsLastFocusedElement.focus();
+    }
+    deckSettingsLastFocusedElement = null;
 }
+
+function isDeckSettingsOpen() {
+    const modal = document.getElementById('deck-settings-modal');
+    return !!modal && !modal.classList.contains('hidden');
+}
+
+function handleDeckSettingsBackdropClick(event) {
+    const modal = document.getElementById('deck-settings-modal');
+    if (!modal) return;
+    if (event.target === modal) closeDeckSettings();
+}
+
+function handleDeckSettingsEscape(event) {
+    if (event.key !== 'Escape') return;
+    const formatConfirmModal = document.getElementById('deck-format-confirm-modal');
+    if (formatConfirmModal && !formatConfirmModal.classList.contains('hidden')) {
+        closeDeckFormatConfirmDialog();
+        return;
+    }
+    if (isDeckSettingsOpen()) closeDeckSettings();
+    if (isDeckRecordingsOpen()) closeDeckRecordings();
+}
+
+function getDeckSettingsFocusableElements() {
+    const modal = document.getElementById('deck-settings-modal');
+    if (!modal || modal.classList.contains('hidden')) return [];
+
+    const selectors = [
+        'a[href]',
+        'button:not([disabled])',
+        'input:not([disabled]):not([type="hidden"])',
+        'select:not([disabled])',
+        'textarea:not([disabled])',
+        '[tabindex]:not([tabindex="-1"])',
+    ];
+
+    return Array.from(modal.querySelectorAll(selectors.join(','))).filter((el) => {
+        const style = window.getComputedStyle(el);
+        return style.display !== 'none' && style.visibility !== 'hidden';
+    });
+}
+
+function handleDeckSettingsTabTrap(event) {
+    if (event.key !== 'Tab' || !isDeckSettingsOpen()) return;
+
+    const focusable = getDeckSettingsFocusableElements();
+    if (focusable.length === 0) {
+        event.preventDefault();
+        return;
+    }
+
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    const active = document.activeElement;
+
+    if (event.shiftKey && (active === first || !focusable.includes(active))) {
+        event.preventDefault();
+        last.focus();
+        return;
+    }
+
+    if (!event.shiftKey && (active === last || !focusable.includes(active))) {
+        event.preventDefault();
+        first.focus();
+    }
+}
+
+document.addEventListener('keydown', handleDeckSettingsEscape);
+document.addEventListener('keydown', handleDeckSettingsTabTrap);
 
 async function saveDeckSettings() {
     if (!activeDeckSettingsHost) return;
@@ -1195,10 +2057,26 @@ async function saveDeckSettings() {
         'ds-video-input': 'video input',
         'ds-audio-input': 'audio input',
         'ds-audio-codec': 'audio codec',
+        'ds-default-standard': 'default standard',
+        'ds-slate-reel': 'reel',
+        'ds-scene-id': 'scene id',
+        'ds-shot-type': 'shot type',
+        'ds-take': 'take',
+        'ds-take-scenario': 'take scenario',
+        'ds-take-auto-inc': 'take auto inc',
+        'ds-good-take': 'good take',
+        'ds-environment': 'environment',
+        'ds-day-night': 'day night',
+        'ds-project-name': 'project name',
+        'ds-camera': 'camera',
+        'ds-director': 'director',
+        'ds-camera-operator': 'camera operator',
     };
     Object.entries(fieldMap).forEach(([elId, key]) => {
         const el = document.getElementById(elId);
-        if (el && el.value) settings[key] = el.value;
+        if (!el) return;
+        const value = String(el.value || '').trim();
+        if (value) settings[key] = value;
     });
 
     if (Object.keys(settings).length === 0) {
@@ -1257,8 +2135,22 @@ function _renderCurrentSettingsPanel(settings) {
         'video input': 'Video Input',
         'audio input': 'Audio Input',
         'audio codec': 'Audio Codec',
+        'default standard': 'Default Standard',
         'timecode input': 'Timecode Input',
         'timecode output': 'Timecode Output',
+        'reel': 'Reel',
+        'scene id': 'Scene ID',
+        'shot type': 'Shot Type',
+        'take': 'Take',
+        'take scenario': 'Take Scenario',
+        'take auto inc': 'Take Auto Increment',
+        'good take': 'Good Take',
+        'environment': 'Environment',
+        'day night': 'Day/Night',
+        'project name': 'Project Name',
+        'camera': 'Camera',
+        'director': 'Director',
+        'camera operator': 'Camera Operator',
     };
     let html = '<span class="block font-semibold text-slate-500 tracking-wide uppercase text-[10px] mb-1.5">Current Device Values</span>';
     const knownKeys = Object.keys(LABELS);
@@ -1289,6 +2181,8 @@ Object.assign(window, {
     closeFolderBrowser,
     navigateFolder,
     selectCurrentFolder,
+    insertSlateGlobalTemplate,
+    insertSlatePerDeckTemplate,
     clearActiveEventContext,
     triggerPluginSync,
     addManualScheduleRow,
@@ -1297,11 +2191,23 @@ Object.assign(window, {
     uploadScheduleFile,
     openNativePicker,
     openSiblingPicker,
+    insertEventSlateTemplate,
+    formatDeckCard,
+    closeDeckFormatConfirmDialog,
+    handleDeckFormatConfirmBackdropClick,
+    confirmDeckFormatAction,
+    openDeckRecordings,
+    closeDeckRecordings,
+    handleDeckRecordingsBackdropClick,
+    loadDeckRecordingsList,
+    transferDeckRecording,
     sendDeckCommand,
     sendCommandToAll,
     openDeckSettings,
     closeDeckSettings,
+    handleDeckSettingsBackdropClick,
     saveDeckSettings,
+    loadDeckSettingsDebug,
 });
 
 // Update your primary load sequence to populate the HUD card on application bootup

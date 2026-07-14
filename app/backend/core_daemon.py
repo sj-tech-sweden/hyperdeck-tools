@@ -195,6 +195,84 @@ def _download_and_distribute_sync(
         return False
 
 
+def _list_recordings_from_ftp_sync(host: str, slot_id: str) -> list[dict[str, Any]]:
+    recordings: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def _collect_from_current_dir(ftp: ftplib.FTP) -> None:
+        names: list[str] = []
+        try:
+            names = ftp.nlst()
+        except Exception:
+            names = []
+
+        for raw_name in names:
+            name = os.path.basename(str(raw_name or "").strip())
+            lower = name.lower()
+            if not lower.endswith((".mov", ".mp4", ".mxf")):
+                continue
+            if name in seen:
+                continue
+            seen.add(name)
+
+            size = 0
+            try:
+                size = int(ftp.size(raw_name) or 0)
+            except Exception:
+                try:
+                    size = int(ftp.size(name) or 0)
+                except Exception:
+                    size = 0
+
+            recordings.append({"name": name, "size": size, "modified": ""})
+
+    try:
+        ftp = ftplib.FTP(host, timeout=15)
+        ftp.login()
+
+        # Some models expose files in /<slot>, others in root.
+        target_slot = str(slot_id or "1").strip() or "1"
+        probe_paths = [f"/{target_slot}", target_slot, "/", ""]
+
+        for path in probe_paths:
+            try:
+                if path:
+                    ftp.cwd(path)
+                _collect_from_current_dir(ftp)
+            except Exception:
+                continue
+
+        ftp.quit()
+    except Exception:
+        return []
+
+    recordings.sort(key=lambda item: str(item.get("name", "")).lower(), reverse=True)
+    return recordings
+
+
+async def list_recordings_from_deck(host: str, slot_id: str = "1") -> list[dict[str, Any]]:
+    return await asyncio.to_thread(_list_recordings_from_ftp_sync, host, slot_id)
+
+
+async def transfer_recording_from_deck(
+    host: str,
+    slot_id: str,
+    remote_filename: str,
+    local_filename: str,
+    destinations: list[str],
+    progress_callback=None,
+) -> bool:
+    return await asyncio.to_thread(
+        _download_and_distribute_sync,
+        host,
+        slot_id,
+        remote_filename,
+        local_filename,
+        destinations,
+        progress_callback,
+    )
+
+
 async def _trigger_transfer_for_stop(
     deck_name: str,
     host: str,

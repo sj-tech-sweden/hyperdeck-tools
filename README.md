@@ -99,3 +99,53 @@ Naming template supports tokens including:
 - Schedules are saved in `app/backend/schedule.json`.
 - Uploaded files are stored in `app/backend/uploads/`.
 - Plugin scripts are in `app/backend/plugins/`.
+- HyperDeck model fallback options are in `app/backend/model_capability_profiles.json`.
+
+### Scoped Slate Metadata
+
+Slate metadata is resolved at record time using:
+
+- `global` config metadata (`config.json` -> `slate_metadata.global`)
+- `per_deck` config metadata (`config.json` -> `slate_metadata.per_deck`)
+- per-event metadata stored directly on each schedule event row (`slate_metadata` in `schedule.json`)
+
+Precedence:
+
+`global` -> `per_deck` -> `event row metadata`
+
+Example config scope:
+
+```json
+{
+  "slate_metadata": {
+    "global": {
+      "project name": "Summer Festival 2026",
+      "director": "A. Director"
+    },
+    "per_deck": {
+      "MainDeck": {
+        "camera": "A"
+      },
+      "YouthDeck": {
+        "camera": "B"
+      }
+    }
+  }
+}
+```
+
+Example schedule event row:
+
+```json
+{
+  "id": "opening_service",
+  "planned_title": "Opening Service",
+  "start_time": "2026-07-15 19:30",
+  "stage": "Main Stage",
+  "slate_metadata": {
+    "scene id": "OPN",
+    "environment": "interior",
+    "day night": "day"
+  }
+}
+```

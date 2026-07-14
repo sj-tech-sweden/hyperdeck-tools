@@ -1,0 +1,42 @@
+{
+  "hyperdeck studio mini": {
+    "file format": [
+      "H.264Low",
+      "H.264Medium",
+      "H.264High",
+      "QuickTimeProRes",
+      "QuickTimeProResHQ",
+      "QuickTimeProResLT",
+      "QuickTimeProResProxy",
+      "QuickTimeDNxHD220",
+      "QuickTimeDNxHD145",
+      "QuickTimeDNxHD45"
+    ],
+    "video input": [
+      "SDI"
+    ],
+    "audio input": [
+      "embedded"
+    ],
+    "audio codec": [
+      "AAC",
+      "PCM"
+    ],
+    "default standard": [
+      "1080p23.98",
+      "1080p24",
+      "1080p25",
+      "1080p29.97",
+      "1080p30",
+      "1080p50",
+      "1080p59.94",
+      "1080p60",
+      "1080i50",
+      "1080i59.94",
+      "1080i60",
+      "720p50",
+      "720p59.94",
+      "720p60"
+    ]
+  }
+}

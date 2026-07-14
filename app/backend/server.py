@@ -6,6 +6,7 @@ import inspect
 import ast
 import asyncio
 import logging
+import re
 from datetime import datetime
 from typing import Any, Optional
 from fastapi import FastAPI, HTTPException, UploadFile, File
@@ -42,6 +43,7 @@ ACTIVE_EVENT_FILE = "app/backend/active_event.json"
 PLUGINS_DIR = "app/backend/plugins"
 CONFIG_FILE = "app/backend/config.json" # Your core hyperdeck/destinations config
 UPLOADS_DIR = "app/backend/uploads"
+MODEL_CAPABILITY_PROFILES_FILE = "app/backend/model_capability_profiles.json"
 DEFAULT_CONFIG = {
     "destinations": [],
     "filename_template": "{year}{month}{day}_{planned_title}",
@@ -51,7 +53,80 @@ DEFAULT_CONFIG = {
     "deck_stages": {},
     "schedule_auto_mode": True,
     "schedule_max_drift_minutes": 45,
+    "slate_metadata": {
+        "global": {},
+        "per_deck": {},
+        "per_event": {},
+    },
 }
+
+SLATE_SETTING_KEYS: tuple[str, ...] = (
+    "reel",
+    "scene id",
+    "shot type",
+    "take",
+    "take scenario",
+    "take auto inc",
+    "good take",
+    "environment",
+    "day night",
+    "project name",
+    "camera",
+    "director",
+    "camera operator",
+)
+
+DECK_SETTING_KEYS: tuple[str, ...] = (
+    "file format",
+    "video input",
+    "audio input",
+    "audio codec",
+    "default standard",
+)
+
+
+def load_model_capability_profiles() -> dict[str, dict[str, list[str]]]:
+    if not os.path.exists(MODEL_CAPABILITY_PROFILES_FILE):
+        return {}
+
+    try:
+        with open(MODEL_CAPABILITY_PROFILES_FILE, "r", encoding="utf-8") as f:
+            raw = json.load(f) or {}
+    except Exception:
+        logger.exception("Failed to read model capability profile file")
+        return {}
+
+    if not isinstance(raw, dict):
+        return {}
+
+    profiles: dict[str, dict[str, list[str]]] = {}
+    for model_key, values in raw.items():
+        if not isinstance(values, dict):
+            continue
+        normalized_model = str(model_key).strip().lower()
+        if not normalized_model:
+            continue
+
+        normalized_settings: dict[str, list[str]] = {}
+        for setting_key in DECK_SETTING_KEYS:
+            candidates = values.get(setting_key, [])
+            if not isinstance(candidates, list):
+                continue
+            normalized_values: list[str] = []
+            for value in candidates:
+                clean = str(value).strip()
+                if clean:
+                    normalized_values.append(clean)
+            if normalized_values:
+                normalized_settings[setting_key] = normalized_values
+
+        if normalized_settings:
+            profiles[normalized_model] = normalized_settings
+
+    return profiles
+
+
+MODEL_CAPABILITY_PROFILES: dict[str, dict[str, list[str]]] = load_model_capability_profiles()
 
 # Ensure the plugins directory exists out of the gate
 os.makedirs(PLUGINS_DIR, exist_ok=True)
@@ -78,6 +153,283 @@ def is_hyperdeck_success_code(code: Any) -> bool:
     except (TypeError, ValueError):
         return False
     return 100 <= code_int < 300
+
+
+def _split_option_values(raw: str) -> list[str]:
+    value = (raw or "").strip()
+    if not value:
+        return []
+
+    # Remove wrapper punctuation often used in help output.
+    value = value.strip("[]()")
+
+    for sep in (",", "|", "/", ";"):
+        if sep in value:
+            return [part.strip() for part in value.split(sep) if part.strip()]
+
+    # If the string is a space-separated list of token-like values, split by spaces.
+    tokens = value.split()
+    if 1 < len(tokens) <= 16 and all(re.fullmatch(r"[\w.\-:+]+", t) for t in tokens):
+        return tokens
+
+    return [value]
+
+
+def _append_unique_case_insensitive(values: list[str], candidate: str) -> None:
+    clean = str(candidate or "").strip()
+    if not clean:
+        return
+    lower_set = {v.lower() for v in values}
+    if clean.lower() not in lower_set:
+        values.append(clean)
+
+
+def _collect_options_from_text(raw_text: str, options: dict[str, list[str]], key_hints: set[str] | None = None) -> None:
+    """Extract potential option values from free-form HyperDeck responses."""
+    if not raw_text:
+        return
+
+    lines = [line.strip() for line in raw_text.replace("\r\n", "\n").split("\n") if line.strip()]
+    aliases = {
+        "file format": ["file format", "record format", "codec", "format"],
+        "video input": ["video input"],
+        "audio input": ["audio input"],
+        "audio codec": ["audio codec"],
+        "default standard": ["default standard", "video format", "standard"],
+    }
+
+    for key in options.keys():
+        if key_hints and key not in key_hints:
+            continue
+        candidates: list[str] = []
+        words = aliases.get(key, [key])
+        for line in lines:
+            lower = line.lower()
+            if not any(word in lower for word in words):
+                continue
+
+            # Take text after the first colon if present.
+            value_part = line.split(":", 1)[1].strip() if ":" in line else line
+
+            # Gather braced and regular split values.
+            for match in re.findall(r"\{([^}]+)\}", value_part):
+                for part in _split_option_values(match):
+                    _append_unique_case_insensitive(candidates, part)
+            for part in _split_option_values(value_part):
+                _append_unique_case_insensitive(candidates, part)
+
+        for candidate in candidates:
+            _append_unique_case_insensitive(options[key], candidate)
+
+
+async def discover_deck_setting_options(host: str, settings: dict[str, str]) -> tuple[dict[str, list[str]], str]:
+    from app.backend.hyperdeck_control import send_hyperdeck_command, parse_hyperdeck_response, send_hyperdeck_prepare_confirm
+
+    # Strict device-driven mode: no default fallback lists.
+    options: dict[str, list[str]] = {k: [] for k in DECK_SETTING_KEYS}
+    discovered: dict[str, list[str]] = {}
+    source = "current_only"
+    model_name = ""
+
+    try:
+        info_response = await send_hyperdeck_command(host, "device info")
+        parsed_info = parse_hyperdeck_response(info_response)
+        if is_hyperdeck_success_code(parsed_info.get("_code")):
+            model_name = str(parsed_info.get("model", "")).strip().lower()
+    except Exception:
+        model_name = ""
+
+    # Query current configuration (supported on all HyperDeck models) and extract values.
+    try:
+        cfg_response = await send_hyperdeck_command(host, "configuration")
+        _collect_options_from_text(cfg_response, discovered)
+        parsed_cfg = parse_hyperdeck_response(cfg_response)
+        if is_hyperdeck_success_code(parsed_cfg.get("_code")):
+            for key in options.keys():
+                current_val = str(parsed_cfg.get(key, "")).strip()
+                if current_val:
+                    discovered.setdefault(key, [])
+                    _append_unique_case_insensitive(discovered[key], current_val)
+    except Exception:
+        pass
+
+    # Probe specific commands to discover field-specific options from actual device replies.
+    for setting_key in options.keys():
+        probe_commands = [
+            f"configuration: {setting_key}: ?",
+            f"configuration: {setting_key}",
+            f"configuration: {setting_key}:",
+        ]
+        for probe_command in probe_commands:
+            try:
+                response = await send_hyperdeck_command(host, probe_command)
+                temp = {setting_key: []}
+                _collect_options_from_text(response, temp, {setting_key})
+                for value in temp[setting_key]:
+                    discovered.setdefault(setting_key, [])
+                    _append_unique_case_insensitive(discovered[setting_key], value)
+            except Exception:
+                continue
+
+    # Slot probes for current/available video format context.
+    for slot_cmd in ("slot info", "slot select", "slot select: video format: ?", "slot select: video format:"):
+        try:
+            response = await send_hyperdeck_command(host, slot_cmd)
+            temp = {"default standard": [], "file format": []}
+            _collect_options_from_text(response, temp, {"default standard", "file format"})
+            for value in temp["default standard"]:
+                discovered.setdefault("default standard", [])
+                _append_unique_case_insensitive(discovered["default standard"], value)
+            for value in temp["file format"]:
+                discovered.setdefault("file format", [])
+                _append_unique_case_insensitive(discovered["file format"], value)
+        except Exception:
+            continue
+
+    # Per setting, keep only device-reported options.
+    for key in list(options.keys()):
+        if key in discovered and discovered[key]:
+            options[key] = discovered[key]
+
+    # If device cannot enumerate option lists, use model profile as fallback.
+    used_model_profile = False
+    model_profile = MODEL_CAPABILITY_PROFILES.get(model_name, {}) if model_name else {}
+    if model_profile:
+        for key in options.keys():
+            if options[key]:
+                continue
+            for candidate in model_profile.get(key, []):
+                _append_unique_case_insensitive(options[key], candidate)
+            if options[key]:
+                used_model_profile = True
+
+    if discovered:
+        if len(discovered) == len(options):
+            source = "device"
+        else:
+            source = "device+model" if used_model_profile else "device_partial"
+    elif used_model_profile:
+        source = "model_profile"
+
+    # Ensure current values are selectable even when option enumeration is incomplete.
+    for key in options.keys():
+        current = str(settings.get(key, "")).strip()
+        _append_unique_case_insensitive(options[key], current)
+
+    return options, source
+
+
+def _deck_option_probe_commands() -> list[str]:
+    commands: list[str] = [
+        "device info",
+        "configuration",
+        "transport info",
+        "slot info",
+        "slot select",
+        "slot select: video format: ?",
+        "slot select: video format:",
+        "external drive list",
+        "external drive selected",
+    ]
+    for setting_key in DECK_SETTING_KEYS:
+        commands.extend([
+            f"configuration: {setting_key}: ?",
+            f"configuration: {setting_key}",
+            f"configuration: {setting_key}:",
+        ])
+    commands.extend(["slot select", "slot info"])
+    # Keep order but remove duplicates.
+    seen: set[str] = set()
+    unique_commands: list[str] = []
+    for cmd in commands:
+        if cmd in seen:
+            continue
+        seen.add(cmd)
+        unique_commands.append(cmd)
+    return unique_commands
+
+
+async def discover_deck_slots(host: str) -> list[str]:
+    from app.backend.hyperdeck_control import send_hyperdeck_command, parse_hyperdeck_response
+
+    discovered: list[str] = []
+    seen: set[str] = set()
+
+    # Probe explicit slot ids because many models return only the selected slot for plain `slot info`.
+    for slot_num in range(1, 7):
+        try:
+            response = await send_hyperdeck_command(host, f"slot info: slot id: {slot_num}")
+            parsed = parse_hyperdeck_response(response)
+            if not is_hyperdeck_success_code(parsed.get("_code")):
+                continue
+            slot_id = str(parsed.get("slot id", "") or "").strip()
+            if not slot_id:
+                continue
+            if slot_id not in seen:
+                seen.add(slot_id)
+                discovered.append(slot_id)
+        except Exception:
+            continue
+
+    if discovered:
+        return discovered
+
+    try:
+        response = await send_hyperdeck_command(host, "slot info")
+        parsed = parse_hyperdeck_response(response)
+        if not is_hyperdeck_success_code(parsed.get("_code")):
+            return ["1"]
+
+        # Common keys seen across firmware variants.
+        slot_id = str(parsed.get("slot id", "") or "").strip()
+        slot_count_raw = str(parsed.get("slot count", "") or parsed.get("slots", "") or "").strip()
+
+        slot_count = 0
+        if slot_count_raw.isdigit():
+            slot_count = int(slot_count_raw)
+
+        if slot_count > 0:
+            return [str(i) for i in range(1, slot_count + 1)]
+        if slot_id:
+            return [slot_id]
+    except Exception:
+        pass
+
+    return ["1"]
+
+
+async def run_deck_option_probes(host: str) -> list[dict[str, Any]]:
+    from app.backend.hyperdeck_control import send_hyperdeck_command, parse_hyperdeck_response, send_hyperdeck_commands_session
+
+    results: list[dict[str, Any]] = []
+    for command in _deck_option_probe_commands():
+        try:
+            response = await send_hyperdeck_command(host, command)
+            parsed = parse_hyperdeck_response(response)
+            results.append({
+                "command": command,
+                "success": is_hyperdeck_success_code(parsed.get("_code")),
+                "code": parsed.get("_code", 0),
+                "status": parsed.get("_status", ""),
+                "response": response,
+            })
+        except HTTPException as exc:
+            results.append({
+                "command": command,
+                "success": False,
+                "code": exc.status_code,
+                "status": "HTTPException",
+                "response": str(exc.detail),
+            })
+        except Exception as exc:
+            results.append({
+                "command": command,
+                "success": False,
+                "code": 0,
+                "status": "Exception",
+                "response": str(exc),
+            })
+    return results
 
 async def is_hyperdeck_online(host: str, port: int = 9993, timeout: float = 0.35) -> bool:
     try:
@@ -136,6 +488,9 @@ def normalize_schedule_item(raw: dict[str, Any], index: int) -> dict[str, Any]:
         normalized_item["start_time"] = start_time
     if stage:
         normalized_item["stage"] = stage
+    slate_metadata = sanitize_slate_settings(raw.get("slate_metadata", {}))
+    if slate_metadata:
+        normalized_item["slate_metadata"] = slate_metadata
     return normalized_item
 
 def normalize_schedule_payload(data: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -210,7 +565,126 @@ def normalize_config_payload(config: dict[str, Any]) -> dict[str, Any]:
     except (TypeError, ValueError):
         merged["schedule_max_drift_minutes"] = 45
     merged["filename_template"] = str(merged.get("filename_template") or DEFAULT_CONFIG["filename_template"])
+
+    slate_cfg = merged.get("slate_metadata")
+    if not isinstance(slate_cfg, dict):
+        slate_cfg = {}
+
+    slate_global = slate_cfg.get("global")
+    slate_per_deck = slate_cfg.get("per_deck")
+    slate_per_event = slate_cfg.get("per_event")
+
+    merged["slate_metadata"] = {
+        "global": slate_global if isinstance(slate_global, dict) else {},
+        "per_deck": slate_per_deck if isinstance(slate_per_deck, dict) else {},
+        "per_event": slate_per_event if isinstance(slate_per_event, dict) else {},
+    }
     return merged
+
+
+def sanitize_slate_settings(raw: Any) -> dict[str, str]:
+    if not isinstance(raw, dict):
+        return {}
+    clean: dict[str, str] = {}
+    for key, value in raw.items():
+        key_clean = str(key or "").strip().lower()
+        if key_clean not in SLATE_SETTING_KEYS:
+            continue
+        value_clean = str(value or "").strip()
+        if value_clean:
+            clean[key_clean] = value_clean
+    return clean
+
+
+def resolve_scoped_slate_metadata(config: dict[str, Any], deck_name: str, host: str, event_id: str) -> dict[str, str]:
+    slate_cfg = config.get("slate_metadata", {}) if isinstance(config, dict) else {}
+    global_scope = sanitize_slate_settings(slate_cfg.get("global", {}))
+
+    per_deck_raw = slate_cfg.get("per_deck", {}) if isinstance(slate_cfg.get("per_deck", {}), dict) else {}
+    deck_scope = sanitize_slate_settings(per_deck_raw.get(deck_name, {}))
+    if not deck_scope:
+        # Optional host-keyed fallback for per-deck scope.
+        deck_scope = sanitize_slate_settings(per_deck_raw.get(host, {}))
+
+    per_event_raw = slate_cfg.get("per_event", {}) if isinstance(slate_cfg.get("per_event", {}), dict) else {}
+    event_scope = sanitize_slate_settings(per_event_raw.get(event_id, {})) if event_id else {}
+
+    # Precedence: global < per_deck < per_event
+    return {**global_scope, **deck_scope, **event_scope}
+
+
+def resolve_record_event_id_for_deck(config: dict[str, Any], deck_name: str) -> str:
+    schedule = load_schedule()
+    resolution = build_deck_schedule_resolution(config, deck_name, schedule)
+    matched_event = resolution.get("matched_event") if isinstance(resolution, dict) else None
+    matched_id = str((matched_event or {}).get("id", "")).strip() if isinstance(matched_event, dict) else ""
+    if matched_id:
+        return matched_id
+
+    active = load_active_event()
+    active_id = str((active or {}).get("id", "")).strip()
+    return active_id if active_id and active_id.lower() != "default" else ""
+
+
+async def apply_scoped_slate_metadata_for_record(deck_name: str, host: str) -> list[dict[str, Any]]:
+    from app.backend.hyperdeck_control import (
+        build_configuration_command,
+        parse_hyperdeck_response,
+        send_hyperdeck_command,
+    )
+
+    config = await get_config()
+    schedule = load_schedule()
+
+    event_id = ""
+    event_scope: dict[str, str] = {}
+
+    resolution = build_deck_schedule_resolution(config, deck_name, schedule)
+    matched_event = resolution.get("matched_event") if isinstance(resolution, dict) else None
+    matched_id = str((matched_event or {}).get("id", "")).strip() if isinstance(matched_event, dict) else ""
+
+    if matched_id:
+        event_id = matched_id
+    else:
+        active = load_active_event()
+        active_id = str((active or {}).get("id", "")).strip()
+        if active_id and active_id.lower() != "default":
+            event_id = active_id
+
+    if event_id:
+        source_item = next((item for item in schedule if str(item.get("id", "")).strip() == event_id), None)
+        if isinstance(source_item, dict):
+            event_scope = sanitize_slate_settings(source_item.get("slate_metadata", {}))
+
+    # Event row metadata in schedule has highest precedence.
+    metadata = {
+        **resolve_scoped_slate_metadata(config, deck_name, host, event_id),
+        **event_scope,
+    }
+    if not metadata:
+        return []
+
+    commands = build_configuration_command(metadata)
+    if not commands:
+        return []
+
+    results: list[dict[str, Any]] = []
+    for cmd in commands:
+        try:
+            response = await send_hyperdeck_command(host, cmd)
+            parsed = parse_hyperdeck_response(response)
+            results.append({
+                "command": cmd,
+                "success": is_hyperdeck_success_code(parsed.get("_code")),
+                "response": response,
+            })
+        except HTTPException as exc:
+            results.append({
+                "command": cmd,
+                "success": False,
+                "response": str(exc.detail),
+            })
+    return results
 
 def parse_start_time(value: str) -> Optional[datetime]:
     raw = (value or "").strip()
@@ -528,6 +1002,10 @@ async def _send_command_to_deck(deck_id: str, host: str, command: str) -> dict:
     from app.backend.hyperdeck_control import send_hyperdeck_command, parse_hyperdeck_response
     from app.backend.core_daemon import global_deck_state_cache
     try:
+        metadata_results: list[dict[str, Any]] = []
+        if command == "record":
+            metadata_results = await apply_scoped_slate_metadata_for_record(deck_id, host)
+
         response = await send_hyperdeck_command(host, command)
         parsed = parse_hyperdeck_response(response)
         success = is_hyperdeck_success_code(parsed.get("_code"))
@@ -550,7 +1028,13 @@ async def _send_command_to_deck(deck_id: str, host: str, command: str) -> dict:
                 "file": existing.get("file", ""),
                 "is_transferring": bool(existing.get("is_transferring", False)),
             }
-        return {"name": deck_id, "host": host, "success": success, "response": response}
+        return {
+            "name": deck_id,
+            "host": host,
+            "success": success,
+            "response": response,
+            "metadata_results": metadata_results,
+        }
     except HTTPException as exc:
         return {
             "name": deck_id,
@@ -621,8 +1105,204 @@ async def deck_stop(host: str):
     return {"status": "ok", "host": host, "response": result["response"]}
 
 
+@app.get("/api/control/{host}/recordings")
+async def list_deck_recordings(host: str, slot_id: str = "1"):
+    """List available recording files on a deck slot via FTP for manual browsing/transfer."""
+    await _validate_deck_host(host)
+    from app.backend.core_daemon import list_recordings_from_deck
+
+    recordings = await list_recordings_from_deck(host, str(slot_id or "1"))
+    return {
+        "host": host,
+        "slot_id": str(slot_id or "1"),
+        "recordings": recordings,
+    }
+
+
+@app.get("/api/control/{host}/slots")
+async def list_deck_slots(host: str):
+    """Return available slot IDs for a deck, if the device reports them."""
+    await _validate_deck_host(host)
+    slots = await discover_deck_slots(host)
+    return {
+        "host": host,
+        "slots": slots,
+    }
+
+
+@app.post("/api/control/{host}/transfer-recording")
+async def transfer_deck_recording(host: str, payload: dict[str, Any]):
+    """Manually transfer a selected recording from HyperDeck FTP storage to configured destinations."""
+    await _validate_deck_host(host)
+
+    slot_id = str(payload.get("slot_id") or "1").strip() or "1"
+    remote_filename = str(payload.get("remote_filename") or "").strip()
+    local_filename = str(payload.get("local_filename") or remote_filename).strip()
+
+    if not remote_filename:
+        raise HTTPException(status_code=400, detail="remote_filename is required.")
+
+    # Prevent path traversal and nested path injection.
+    if any(part in remote_filename for part in ("/", "\\", "..")):
+        raise HTTPException(status_code=400, detail="remote_filename must be a plain filename.")
+    if any(part in local_filename for part in ("/", "\\", "..")):
+        raise HTTPException(status_code=400, detail="local_filename must be a plain filename.")
+
+    config = await get_config()
+    destinations = [str(p).strip() for p in (config.get("destinations") or []) if str(p).strip()]
+    if not destinations:
+        raise HTTPException(status_code=400, detail="No destination folders configured.")
+
+    decks = await _load_all_deck_hosts()
+    deck_name = next((name for name, value in decks.items() if value == host), host)
+
+    from app.backend.core_daemon import global_deck_state_cache, transfer_recording_from_deck
+
+    def _progress_callback(pct: int) -> None:
+        state = dict(global_deck_state_cache.get(host, {}))
+        state["name"] = state.get("name", deck_name)
+        state["connected"] = True
+        state["status"] = f"Transferring ({pct}%)"
+        state["transport_status"] = state.get("transport_status", "Stopped")
+        state["progress"] = max(0, min(100, int(pct or 0)))
+        state["file"] = local_filename
+        state["is_transferring"] = True
+        global_deck_state_cache[host] = state
+
+    success = await transfer_recording_from_deck(
+        host=host,
+        slot_id=slot_id,
+        remote_filename=remote_filename,
+        local_filename=local_filename,
+        destinations=destinations,
+        progress_callback=_progress_callback,
+    )
+
+    if success:
+        state = dict(global_deck_state_cache.get(host, {}))
+        state["name"] = state.get("name", deck_name)
+        state["connected"] = True
+        state["status"] = "Transfer Complete"
+        state["progress"] = 100
+        state["file"] = local_filename
+        state["is_transferring"] = False
+        global_deck_state_cache[host] = state
+        return {
+            "status": "ok",
+            "host": host,
+            "slot_id": slot_id,
+            "remote_filename": remote_filename,
+            "local_filename": local_filename,
+        }
+
+    state = dict(global_deck_state_cache.get(host, {}))
+    state["name"] = state.get("name", deck_name)
+    state["connected"] = bool(state.get("connected", True))
+    state["status"] = "Transfer Failed"
+    state["is_transferring"] = False
+    global_deck_state_cache[host] = state
+    raise HTTPException(status_code=502, detail="Failed to transfer recording from deck FTP storage.")
+
+
+@app.post("/api/control/{host}/format-card")
+async def format_deck_card(host: str, payload: dict[str, Any]):
+    """Format a card in the selected slot (destructive). Requires explicit confirmation text."""
+    await _validate_deck_host(host)
+
+    confirm_text = str(payload.get("confirm_text") or "").strip()
+    if confirm_text != "FORMAT":
+        raise HTTPException(status_code=400, detail="Formatting requires confirm_text='FORMAT'.")
+
+    slot_id = str(payload.get("slot_id") or "1").strip() or "1"
+    filesystem_raw = str(payload.get("filesystem") or "exFAT").strip().lower()
+    filesystem = "exFAT" if filesystem_raw in {"exfat", "ex-fat", "ex_fat"} else "HFS+"
+    volume_name = str(payload.get("volume_name") or "").strip()
+
+    from app.backend.hyperdeck_control import parse_hyperdeck_response, send_hyperdeck_prepare_confirm
+
+    def _is_2xx(parsed: dict[str, Any]) -> bool:
+        try:
+            code = int(parsed.get("_code", 0))
+        except (TypeError, ValueError):
+            return False
+        return 200 <= code < 300
+
+    # Step 1: prepare command (slot form as primary, device form as fallback).
+    prepare_cmd_slot = f"format: slot id: {slot_id} prepare: {filesystem}"
+    if volume_name:
+        prepare_cmd_slot = f"{prepare_cmd_slot} name: {volume_name}"
+
+    prepare_cmd_device = f"format: device: {slot_id} prepare: {filesystem}"
+    if volume_name:
+        prepare_cmd_device = f"{prepare_cmd_device} name: {volume_name}"
+
+    prepare_attempts: list[dict[str, str]] = []
+    confirm_attempts: list[dict[str, str]] = []
+    prepare_used = ""
+    confirm_used = ""
+    confirm_response = ""
+    token = ""
+
+    confirm_templates = [
+        "format: confirm: {token}",
+        f"format: slot id: {slot_id} confirm: {{token}}",
+        f"format: device: {slot_id} confirm: {{token}}",
+    ]
+
+    for prepare_cmd in (prepare_cmd_slot, prepare_cmd_device):
+        for confirm_template in confirm_templates:
+            try:
+                result = await send_hyperdeck_prepare_confirm(host, prepare_cmd, confirm_template)
+                prepare_attempts.append({
+                    "command": result.get("prepare_command", prepare_cmd),
+                    "response": str(result.get("prepare_response", "")),
+                })
+
+                if result.get("error") == "no_token":
+                    continue
+
+                confirm_cmd = str(result.get("confirm_command", ""))
+                response = str(result.get("confirm_response", ""))
+                parsed = parse_hyperdeck_response(response)
+                confirm_attempts.append({"command": confirm_cmd, "response": response})
+                if _is_2xx(parsed):
+                    prepare_used = prepare_cmd
+                    confirm_used = confirm_cmd
+                    confirm_response = response
+                    token = str(result.get("token", ""))
+                    break
+            except HTTPException as exc:
+                confirm_attempts.append({
+                    "command": f"{prepare_cmd} -> {confirm_template}",
+                    "response": str(exc.detail),
+                })
+        if confirm_used:
+            break
+
+    if not confirm_used:
+        detail_payload: dict[str, Any] = {
+            "message": "Deck rejected format confirm command.",
+            "prepare_attempts": prepare_attempts,
+            "confirm_attempts": confirm_attempts,
+        }
+        if token:
+            detail_payload["token"] = token
+        raise HTTPException(status_code=502, detail=detail_payload)
+
+    return {
+        "status": "ok",
+        "host": host,
+        "slot_id": slot_id,
+        "filesystem": filesystem,
+        "volume_name": volume_name,
+        "prepare_command": prepare_used,
+        "confirm_command": confirm_used,
+        "response": confirm_response,
+    }
+
+
 @app.get("/api/control/{host}/configuration")
-async def get_deck_configuration(host: str):
+async def get_deck_configuration(host: str, debug: bool = False):
     """Retrieve the current configuration from a single HyperDeck."""
     await _validate_deck_host(host)
     from app.backend.hyperdeck_control import send_hyperdeck_command, parse_hyperdeck_response
@@ -630,9 +1310,34 @@ async def get_deck_configuration(host: str):
     parsed = parse_hyperdeck_response(response)
     if not is_hyperdeck_success_code(parsed.get("_code")):
         raise HTTPException(status_code=502, detail=f"HyperDeck error: {response}")
-    # Strip internal meta-keys before returning
+
+    # Strip internal meta-keys before returning.
     settings = {k: v for k, v in parsed.items() if not k.startswith("_")}
-    return {"host": host, "settings": settings}
+
+    # Best-effort enrich with slate metadata sections when supported by the device.
+    for extra_command in ("slate clips", "slate project"):
+        try:
+            extra_response = await send_hyperdeck_command(host, extra_command)
+            extra_parsed = parse_hyperdeck_response(extra_response)
+            if is_hyperdeck_success_code(extra_parsed.get("_code")):
+                for key, value in extra_parsed.items():
+                    if key.startswith("_"):
+                        continue
+                    settings[key] = value
+        except Exception:
+            # Older models/firmware may not implement slate commands.
+            continue
+
+    options, options_source = await discover_deck_setting_options(host, settings)
+    payload: dict[str, Any] = {
+        "host": host,
+        "settings": settings,
+        "options": options,
+        "options_source": options_source,
+    }
+    if debug:
+        payload["probes"] = await run_deck_option_probes(host)
+    return payload
 
 
 @app.post("/api/control/{host}/configuration")
