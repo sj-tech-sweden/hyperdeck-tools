@@ -991,7 +991,11 @@ async def get_config():
 
 @app.post("/api/config")
 async def save_config(config: dict):
-    normalized = normalize_config_payload(config)
+    # Merge with existing persisted config so omitted sections (e.g. settings_groups)
+    # survive dashboard saves that only send a subset of keys.
+    existing = await get_config()
+    merged = {**existing, **(config or {})}
+    normalized = normalize_config_payload(merged)
     with open(CONFIG_FILE, 'w') as f:
         json.dump(normalized, f, indent=4)
     # Pro Tip: Trigger your background daemon to reload its configuration here if needed!
