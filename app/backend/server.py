@@ -16,6 +16,18 @@ from fastapi.responses import FileResponse
 app = FastAPI()
 logger = logging.getLogger(__name__)
 
+
+@app.on_event("startup")
+async def startup_background_workers():
+    from app.backend.core_daemon import start_background_monitor
+    start_background_monitor()
+
+
+@app.on_event("shutdown")
+async def shutdown_background_workers():
+    from app.backend.core_daemon import stop_background_monitor
+    await stop_background_monitor()
+
 # Enable CORS so your frontend can chat with the backend smoothly
 app.add_middleware(
     CORSMiddleware,
@@ -58,6 +70,14 @@ def load_active_event():
 def save_active_event(data):
     with open(ACTIVE_EVENT_FILE, 'w') as f:
         json.dump(data, f, indent=4)
+
+
+def is_hyperdeck_success_code(code: Any) -> bool:
+    try:
+        code_int = int(code)
+    except (TypeError, ValueError):
+        return False
+    return 100 <= code_int < 300
 
 async def is_hyperdeck_online(host: str, port: int = 9993, timeout: float = 0.35) -> bool:
     try:
@@ -446,6 +466,7 @@ async def get_deck_states():
                 "auto_selected": resolution.get("auto_selected", False),
                 "connected": bool(state.get("connected", False)),
                 "status": state.get("status", "Configured"),
+                "transport_status": state.get("transport_status", state.get("status", "Configured")),
             }
         return enriched
 
@@ -466,6 +487,7 @@ async def get_deck_states():
         fallback_state[str(host)] = {
             "name": str(deck_name),
             "status": "Online" if is_online else "Configured",
+            "transport_status": "Online" if is_online else "Configured",
             "connected": is_online,
             "progress": 0,
             "file": "",
@@ -504,10 +526,30 @@ async def _send_command_to_deck(deck_id: str, host: str, command: str) -> dict:
     deck name, or the host address when no name is available).
     """
     from app.backend.hyperdeck_control import send_hyperdeck_command, parse_hyperdeck_response
+    from app.backend.core_daemon import global_deck_state_cache
     try:
         response = await send_hyperdeck_command(host, command)
         parsed = parse_hyperdeck_response(response)
-        success = parsed.get("_code") in (200, 100)
+        success = is_hyperdeck_success_code(parsed.get("_code"))
+        if success:
+            existing = dict(global_deck_state_cache.get(host, {}))
+            next_status = existing.get("status", "Online")
+            next_transport = existing.get("transport_status", existing.get("status", "Online"))
+            if command == "record":
+                next_status = "Recording"
+                next_transport = "Recording"
+            elif command == "stop":
+                next_status = "Stopped"
+                next_transport = "Stopped"
+            global_deck_state_cache[host] = {
+                "name": existing.get("name", deck_id),
+                "connected": True,
+                "status": next_status,
+                "transport_status": next_transport,
+                "progress": int(existing.get("progress", 0) or 0),
+                "file": existing.get("file", ""),
+                "is_transferring": bool(existing.get("is_transferring", False)),
+            }
         return {"name": deck_id, "host": host, "success": success, "response": response}
     except HTTPException as exc:
         return {
@@ -555,7 +597,9 @@ async def all_decks_stop():
 async def deck_record(host: str):
     """Send a *record* command to a single HyperDeck."""
     await _validate_deck_host(host)
-    result = await _send_command_to_deck(host, host, "record")
+    decks = await _load_all_deck_hosts()
+    deck_name = next((name for name, value in decks.items() if value == host), host)
+    result = await _send_command_to_deck(deck_name, host, "record")
     if not result["success"]:
         status_code = result.get("status_code", 502)
         detail = result["response"] if status_code != 502 else f"HyperDeck rejected command: {result['response']}"
@@ -567,7 +611,9 @@ async def deck_record(host: str):
 async def deck_stop(host: str):
     """Send a *stop* command to a single HyperDeck."""
     await _validate_deck_host(host)
-    result = await _send_command_to_deck(host, host, "stop")
+    decks = await _load_all_deck_hosts()
+    deck_name = next((name for name, value in decks.items() if value == host), host)
+    result = await _send_command_to_deck(deck_name, host, "stop")
     if not result["success"]:
         status_code = result.get("status_code", 502)
         detail = result["response"] if status_code != 502 else f"HyperDeck rejected command: {result['response']}"
@@ -582,7 +628,7 @@ async def get_deck_configuration(host: str):
     from app.backend.hyperdeck_control import send_hyperdeck_command, parse_hyperdeck_response
     response = await send_hyperdeck_command(host, "configuration")
     parsed = parse_hyperdeck_response(response)
-    if parsed.get("_code") not in (200, 100):
+    if not is_hyperdeck_success_code(parsed.get("_code")):
         raise HTTPException(status_code=502, detail=f"HyperDeck error: {response}")
     # Strip internal meta-keys before returning
     settings = {k: v for k, v in parsed.items() if not k.startswith("_")}
@@ -610,7 +656,7 @@ async def set_deck_configuration(host: str, settings: dict):
     for cmd in commands:
         response = await send_hyperdeck_command(host, cmd)
         parsed = parse_hyperdeck_response(response)
-        success = parsed.get("_code") in (200, 100)
+        success = is_hyperdeck_success_code(parsed.get("_code"))
         results.append({"command": cmd, "success": success, "response": response})
 
     overall = all(r["success"] for r in results)

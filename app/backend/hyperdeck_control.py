@@ -10,6 +10,34 @@ HYPERDECK_PORT = 9993
 COMMAND_TIMEOUT = 5.0
 
 
+async def _read_response_block(reader: asyncio.StreamReader, timeout: float) -> str:
+    """Read a HyperDeck response block, tolerating both single-line and multi-line replies."""
+    try:
+        first_line = await asyncio.wait_for(reader.readline(), timeout=timeout)
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Timed out waiting for HyperDeck response line")
+
+    if not first_line:
+        raise HTTPException(status_code=503, detail="HyperDeck closed connection before sending a response")
+
+    chunks: list[bytes] = [first_line]
+
+    # Most replies end with an empty line; some commands only return a status line.
+    # Keep reading briefly for trailing fields but do not block long.
+    for _ in range(32):
+        try:
+            line = await asyncio.wait_for(reader.readline(), timeout=0.12)
+        except asyncio.TimeoutError:
+            break
+        if not line:
+            break
+        chunks.append(line)
+        if line in (b"\r\n", b"\n"):
+            break
+
+    return b"".join(chunks).decode("utf-8", errors="replace").strip()
+
+
 async def send_hyperdeck_command(
     host: str,
     command: str,
@@ -49,38 +77,24 @@ async def send_hyperdeck_command(
         # required for issuing individual commands, so it is intentionally
         # discarded here.  Callers that need version negotiation can capture
         # and parse the return value of a dedicated `device info` command.
+        # Consume banner if present; do not fail hard if deck sends a short/partial greeting.
         try:
-            await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout=timeout)
-        except asyncio.TimeoutError:
-            raise HTTPException(
-                status_code=504,
-                detail=f"Timed out waiting for HyperDeck banner at {host}:{port}",
-            )
-        except (asyncio.IncompleteReadError, asyncio.LimitOverrunError) as exc:
-            raise HTTPException(
-                status_code=503,
-                detail=f"Incomplete banner from HyperDeck at {host}:{port}: {exc}",
-            )
+            await _read_response_block(reader, timeout=min(timeout, 1.5))
+        except HTTPException:
+            pass
 
         writer.write(f"{command}\r\n".encode())
         await writer.drain()
 
-        # All responses end with a blank line (\r\n\r\n).
         try:
-            response_bytes = await asyncio.wait_for(
-                reader.readuntil(b"\r\n\r\n"), timeout=timeout
-            )
-        except asyncio.TimeoutError:
-            raise HTTPException(
-                status_code=504,
-                detail=f"Command '{command}' timed out on HyperDeck at {host}:{port}",
-            )
-        except (asyncio.IncompleteReadError, asyncio.LimitOverrunError) as exc:
-            raise HTTPException(
-                status_code=503,
-                detail=f"Incomplete response from HyperDeck at {host}:{port}: {exc}",
-            )
-        return response_bytes.decode("utf-8", errors="replace").strip()
+            return await _read_response_block(reader, timeout=timeout)
+        except HTTPException as exc:
+            if exc.status_code == 504:
+                raise HTTPException(
+                    status_code=504,
+                    detail=f"Command '{command}' timed out on HyperDeck at {host}:{port}",
+                )
+            raise
     except OSError as exc:
         raise HTTPException(
             status_code=503,

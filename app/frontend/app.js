@@ -329,8 +329,12 @@ async function updateDashboardMetrics() {
 
         let html = '';
         for (const [ip, item] of Object.entries(state)) {
-            const isRecording = item.status.toLowerCase() === 'recording';
-            const pulseClass = isRecording ? 'bg-red-500 animate-pulse' : (item.connected ? 'bg-emerald-500' : 'bg-rose-500');
+            const transportStatus = String(item.transport_status || item.status || '').toLowerCase();
+            const isRecording = transportStatus === 'recording' || transportStatus === 'record';
+            const isPlaying = transportStatus === 'playing' || transportStatus === 'play' || transportStatus === 'forward';
+            const pulseClass = isRecording
+                ? 'bg-red-500 animate-pulse'
+                : (isPlaying ? 'bg-sky-500 animate-pulse' : (item.connected ? 'bg-emerald-500' : 'bg-rose-500'));
             const statusLabel = item.connected ? (item.status === 'Online' ? 'Online' : item.status) : item.status;
             // JSON literals are HTML-escaped before inserting into inline attributes.
             const jsIpAttr = escHtml(JSON.stringify(ip));
@@ -351,6 +355,7 @@ async function updateDashboardMetrics() {
                     </span>
                 </div>
                 ${item.stage ? `<div class="text-[11px] text-indigo-300 mb-2">Stage: ${escHtml(item.stage)}</div>` : ''}
+                ${(item.transport_status && String(item.transport_status) !== String(statusLabel)) ? `<div class="text-[11px] text-slate-300 mb-1">Transport: <span class="text-white">${escHtml(item.transport_status)}</span></div>` : ''}
                 ${item.next_event ? `<div class="text-[11px] text-slate-300 mb-1">Next: <span class="text-white">${escHtml(item.next_event.planned_title || 'Unnamed Event')}</span> (${escHtml(item.next_event.start_time || 'No time')})</div>` : '<div class="text-[11px] text-slate-500 mb-1">Next: No matching schedule event found</div>'}
                 ${item.matched_event ? `<div class="text-[11px] mb-2 ${item.auto_selected ? 'text-emerald-300' : 'text-slate-400'}">Auto Match: ${escHtml(item.matched_event.planned_title)} (${escHtml(item.matched_event.minutes_diff)} min diff)</div>` : '<div class="text-[11px] text-slate-500 mb-2">Auto Match: None within drift window</div>'}
                 
@@ -1061,6 +1066,7 @@ async function sendDeckCommand(host, command) {
             alert(`Command failed on ${host}: ${data.detail || 'Unknown error'}`);
         } else {
             console.info(`${label} on ${host}:`, data.response);
+            updateDashboardMetrics();
         }
     } catch (e) {
         alert(`Could not reach backend API for ${host}.`);
