@@ -302,8 +302,11 @@ def build_configuration_command(settings: dict) -> list[str]:
         "file format",
         "audio codec",
         "default standard",
+        "audio input channels",
+        "audio meters",
         "timecode input",
         "timecode output",
+        "timecode preset",
     }
     ALLOWED_SLATE_CLIPS_KEYS = {
         "reel",

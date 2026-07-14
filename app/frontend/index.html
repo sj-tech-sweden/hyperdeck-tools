@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>HyperDeck Automation Center</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
     <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
 </head>
 <body class="h-full font-sans text-slate-100 antialiased">
@@ -22,6 +23,9 @@
                     </button>
                     <button onclick="sendCommandToAll('stop')" id="btn-stop-all" class="rounded-md bg-slate-700 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-600 transition cursor-pointer">
                         ⏹ Stop All
+                    </button>
+                    <button onclick="openSettingsGroupsModal()" id="btn-settings-groups" class="rounded-md bg-slate-700 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-600 transition cursor-pointer">
+                        Settings Groups
                     </button>
                     <button onclick="triggerDiscovery()" id="btn-discover" class="rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500 transition cursor-pointer">
                         Scan Network
@@ -190,23 +194,8 @@
 
                 <div class="pt-4 border-t border-slate-800 space-y-2">
                     <h3 class="text-sm font-medium text-slate-300">Slate Metadata Scopes</h3>
-                    <p class="text-[11px] text-slate-500">Provide JSON objects. Per-event metadata is edited in the Events view. Precedence on record: global -> per_deck -> event row metadata.</p>
-
-                    <label class="text-xs text-slate-400 block">
-                        Global (all decks)
-                        <textarea id="cfg-slate-global" rows="4" spellcheck="false" class="mt-1 block w-full rounded bg-slate-950 border border-slate-800 text-[11px] font-mono px-2 py-1.5 text-slate-300 focus:outline-none focus:ring-1 focus:ring-indigo-500" placeholder='{"project name":"Summer Festival","director":"A. Director"}'></textarea>
-                    </label>
-                    <div class="-mt-1 flex justify-end">
-                        <button type="button" onclick="insertSlateGlobalTemplate()" class="text-[10px] text-indigo-400 hover:text-indigo-300 font-medium cursor-pointer">Insert Slate Project Global Template</button>
-                    </div>
-
-                    <label class="text-xs text-slate-400 block">
-                        Per Deck (keys = deck names)
-                        <textarea id="cfg-slate-per-deck" rows="5" spellcheck="false" class="mt-1 block w-full rounded bg-slate-950 border border-slate-800 text-[11px] font-mono px-2 py-1.5 text-slate-300 focus:outline-none focus:ring-1 focus:ring-indigo-500" placeholder='{"MainDeck":{"camera":"A"},"YouthDeck":{"camera":"B"}}'></textarea>
-                    </label>
-                    <div class="-mt-1 flex justify-end">
-                        <button type="button" onclick="insertSlatePerDeckTemplate()" class="text-[10px] text-indigo-400 hover:text-indigo-300 font-medium cursor-pointer">Insert Slate Project Per-Deck Template</button>
-                    </div>
+                    <p class="text-[11px] text-slate-500">Global slate defaults. Per-event metadata is edited in Events rows, and per-deck metadata is handled in Deck Settings.</p>
+                    <div id="cfg-slate-global-fields"></div>
 
                     <p id="cfg-slate-status" class="text-[11px] text-slate-500">Slate metadata is optional.</p>
                 </div>
@@ -279,10 +268,54 @@
                                 <option value="">— unchanged —</option>
                             </select>
                         </label>
+                        <label class="text-xs text-slate-400 space-y-1">
+                            <span class="block">Audio Input Channels</span>
+                            <select id="ds-audio-input-channels" class="block w-full rounded bg-slate-950 border border-slate-800 text-xs px-2 py-1.5 text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500">
+                                <option value="">— unchanged —</option>
+                                <option value="2">2</option>
+                                <option value="4">4</option>
+                                <option value="8">8</option>
+                                <option value="16">16</option>
+                            </select>
+                        </label>
+                        <label class="text-xs text-slate-400 space-y-1">
+                            <span class="block">Timecode Input</span>
+                            <select id="ds-timecode-input" class="block w-full rounded bg-slate-950 border border-slate-800 text-xs px-2 py-1.5 text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500">
+                                <option value="">— unchanged —</option>
+                                <option value="embedded">embedded</option>
+                                <option value="external">external</option>
+                                <option value="preset">preset</option>
+                            </select>
+                        </label>
+                        <label class="text-xs text-slate-400 space-y-1">
+                            <span class="block">Timecode Output</span>
+                            <select id="ds-timecode-output" class="block w-full rounded bg-slate-950 border border-slate-800 text-xs px-2 py-1.5 text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500">
+                                <option value="">— unchanged —</option>
+                                <option value="none">none</option>
+                                <option value="embedded">embedded</option>
+                            </select>
+                        </label>
+                        <label class="text-xs text-slate-400 space-y-1">
+                            <span class="block">Timecode Preset</span>
+                            <input id="ds-timecode-preset" type="text" placeholder="00:00:00:00" class="block w-full rounded border border-slate-800 bg-slate-950 text-xs px-2 py-1.5 text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500">
+                        </label>
+                        <label class="text-xs text-slate-400 space-y-1">
+                            <span class="block">Audio Meters</span>
+                            <select id="ds-audio-meters" class="block w-full rounded bg-slate-950 border border-slate-800 text-xs px-2 py-1.5 text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500">
+                                <option value="">— unchanged —</option>
+                                <option value="VU (-18dBFS)">VU (-18dBFS)</option>
+                                <option value="VU (-20dBFS)">VU (-20dBFS)</option>
+                                <option value="PPM (-18dBFS)">PPM (-18dBFS)</option>
+                                <option value="PPM (-20dBFS)">PPM (-20dBFS)</option>
+                            </select>
+                        </label>
                     </div>
 
                     <div class="rounded border border-slate-800 bg-slate-950 p-3 space-y-3">
-                        <span class="block font-semibold text-slate-500 tracking-wide uppercase text-[10px]">Slate Clip Metadata</span>
+                        <div class="flex items-center justify-between">
+                            <span class="block font-semibold text-slate-500 tracking-wide uppercase text-[10px]">Slate Clip Metadata</span>
+                            <button type="button" id="btn-ds-toggle-clip-slate" onclick="toggleDeckSlateSection('clip')" class="text-[10px] text-indigo-400 hover:text-indigo-300 font-medium cursor-pointer">Show all fields</button>
+                        </div>
                         <div class="grid grid-cols-2 gap-3">
                             <label class="text-xs text-slate-400 space-y-1">
                                 <span class="block">Reel</span>
@@ -309,7 +342,7 @@
                                 <span class="block">Take</span>
                                 <input id="ds-take" type="number" min="1" max="99" placeholder="1-99" class="block w-full rounded border border-slate-800 bg-slate-950 text-xs px-2 py-1.5 text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500">
                             </label>
-                            <label class="text-xs text-slate-400 space-y-1">
+                            <label class="ds-slate-clip-extra hidden text-xs text-slate-400 space-y-1">
                                 <span class="block">Take Scenario</span>
                                 <select id="ds-take-scenario" class="block w-full rounded bg-slate-950 border border-slate-800 text-xs px-2 py-1.5 text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500">
                                     <option value="">— unchanged —</option>
@@ -319,7 +352,7 @@
                                     <option value="none">none</option>
                                 </select>
                             </label>
-                            <label class="text-xs text-slate-400 space-y-1">
+                            <label class="ds-slate-clip-extra hidden text-xs text-slate-400 space-y-1">
                                 <span class="block">Take Auto Increment</span>
                                 <select id="ds-take-auto-inc" class="block w-full rounded bg-slate-950 border border-slate-800 text-xs px-2 py-1.5 text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500">
                                     <option value="">— unchanged —</option>
@@ -327,7 +360,7 @@
                                     <option value="false">false</option>
                                 </select>
                             </label>
-                            <label class="text-xs text-slate-400 space-y-1">
+                            <label class="ds-slate-clip-extra hidden text-xs text-slate-400 space-y-1">
                                 <span class="block">Good Take</span>
                                 <select id="ds-good-take" class="block w-full rounded bg-slate-950 border border-slate-800 text-xs px-2 py-1.5 text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500">
                                     <option value="">— unchanged —</option>
@@ -335,7 +368,7 @@
                                     <option value="false">false</option>
                                 </select>
                             </label>
-                            <label class="text-xs text-slate-400 space-y-1">
+                            <label class="ds-slate-clip-extra hidden text-xs text-slate-400 space-y-1">
                                 <span class="block">Environment</span>
                                 <select id="ds-environment" class="block w-full rounded bg-slate-950 border border-slate-800 text-xs px-2 py-1.5 text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500">
                                     <option value="">— unchanged —</option>
@@ -343,7 +376,7 @@
                                     <option value="exterior">exterior</option>
                                 </select>
                             </label>
-                            <label class="text-xs text-slate-400 space-y-1">
+                            <label class="ds-slate-clip-extra hidden text-xs text-slate-400 space-y-1">
                                 <span class="block">Day/Night</span>
                                 <select id="ds-day-night" class="block w-full rounded bg-slate-950 border border-slate-800 text-xs px-2 py-1.5 text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500">
                                     <option value="">— unchanged —</option>
@@ -355,7 +388,10 @@
                     </div>
 
                     <div class="rounded border border-slate-800 bg-slate-950 p-3 space-y-3">
-                        <span class="block font-semibold text-slate-500 tracking-wide uppercase text-[10px]">Slate Project Metadata</span>
+                        <div class="flex items-center justify-between">
+                            <span class="block font-semibold text-slate-500 tracking-wide uppercase text-[10px]">Slate Project Metadata</span>
+                            <button type="button" id="btn-ds-toggle-project-slate" onclick="toggleDeckSlateSection('project')" class="text-[10px] text-indigo-400 hover:text-indigo-300 font-medium cursor-pointer">Show all fields</button>
+                        </div>
                         <div class="grid grid-cols-2 gap-3">
                             <label class="text-xs text-slate-400 space-y-1 col-span-2">
                                 <span class="block">Project Name</span>
@@ -365,11 +401,11 @@
                                 <span class="block">Camera</span>
                                 <input id="ds-camera" type="text" placeholder="A" class="block w-full rounded border border-slate-800 bg-slate-950 text-xs px-2 py-1.5 text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500">
                             </label>
-                            <label class="text-xs text-slate-400 space-y-1">
+                            <label class="ds-slate-project-extra hidden text-xs text-slate-400 space-y-1">
                                 <span class="block">Director</span>
                                 <input id="ds-director" type="text" placeholder="Director name" class="block w-full rounded border border-slate-800 bg-slate-950 text-xs px-2 py-1.5 text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500">
                             </label>
-                            <label class="text-xs text-slate-400 space-y-1 col-span-2">
+                            <label class="ds-slate-project-extra hidden text-xs text-slate-400 space-y-1 col-span-2">
                                 <span class="block">Camera Operator</span>
                                 <input id="ds-camera-operator" type="text" placeholder="Camera operator name" class="block w-full rounded border border-slate-800 bg-slate-950 text-xs px-2 py-1.5 text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500">
                             </label>
@@ -426,6 +462,77 @@
             <div class="flex justify-end gap-3 border-t border-slate-800 pt-4 mt-4">
                 <button onclick="closeDeckSettings()" class="px-4 py-2 text-sm text-slate-400 hover:text-white rounded border border-slate-800 cursor-pointer">Cancel</button>
                 <button onclick="saveDeckSettings()" id="btn-save-deck-settings" class="px-4 py-2 text-sm bg-indigo-600 hover:bg-indigo-500 text-white font-semibold rounded shadow cursor-pointer hidden">Apply Settings</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Settings Groups Modal -->
+    <div id="settings-groups-modal" onclick="handleSettingsGroupsBackdropClick(event)" class="hidden fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 overflow-y-auto z-50">
+        <div class="bg-slate-900 border border-slate-800 rounded-lg max-w-3xl w-full p-6 flex flex-col max-h-[90vh] overflow-hidden shadow-2xl">
+            <div class="flex items-center justify-between border-b border-slate-800 pb-4 mb-4">
+                <div>
+                    <h3 class="text-lg font-semibold text-white">Settings Groups</h3>
+                    <p class="text-xs text-slate-400 mt-0.5">Create shared settings profiles and apply them to selected HyperDecks.</p>
+                </div>
+                <button type="button" onclick="closeSettingsGroupsModal()" aria-label="Close settings groups" class="text-slate-400 hover:text-white cursor-pointer text-xl">✕</button>
+            </div>
+
+            <div class="flex-1 overflow-y-auto min-h-0 pr-1 space-y-3">
+                <div class="grid grid-cols-12 gap-2 items-end">
+                    <label class="col-span-7 text-[11px] text-slate-400 space-y-1">
+                        <span class="block">Group Name</span>
+                        <input id="sg-group-name" type="text" placeholder="e.g. Stage_A_Common" class="block w-full rounded border border-slate-800 bg-slate-900 text-[11px] px-2 py-1.5 text-slate-200 focus:outline-none">
+                    </label>
+                    <label class="col-span-5 text-[11px] text-slate-400 space-y-1">
+                        <span class="block">Saved Group</span>
+                        <select id="sg-group-select" onchange="onSettingsGroupsGroupSelected()" class="block w-full rounded bg-slate-900 border border-slate-800 text-[11px] px-2 py-1.5 text-slate-200 focus:outline-none">
+                            <option value="">Select group...</option>
+                        </select>
+                    </label>
+                </div>
+
+                <div class="rounded border border-slate-800 bg-slate-950 p-3 space-y-2">
+                    <div class="flex items-center justify-between">
+                        <span class="text-[10px] uppercase tracking-wide text-slate-400">Target Decks</span>
+                        <div class="flex gap-1.5">
+                            <button type="button" onclick="setSettingsGroupsTargetsAll(true)" class="text-[10px] text-indigo-300 border border-indigo-500/30 rounded px-1.5 py-0.5 hover:bg-indigo-600/20 cursor-pointer">All</button>
+                            <button type="button" onclick="setSettingsGroupsTargetsAll(false)" class="text-[10px] text-slate-300 border border-slate-700 rounded px-1.5 py-0.5 hover:bg-slate-700/40 cursor-pointer">None</button>
+                        </div>
+                    </div>
+                    <div id="sg-target-hosts" class="grid grid-cols-1 sm:grid-cols-2 gap-1.5 text-[11px] text-slate-300"></div>
+                </div>
+
+                <div class="rounded border border-slate-800 bg-slate-950 p-3 space-y-2">
+                    <div class="flex items-center justify-between">
+                        <span class="text-[10px] uppercase tracking-wide text-slate-400">Field Scope</span>
+                        <div class="flex gap-1.5">
+                            <button type="button" onclick="setSettingsGroupsScopeAll(true)" class="text-[10px] text-indigo-300 border border-indigo-500/30 rounded px-1.5 py-0.5 hover:bg-indigo-600/20 cursor-pointer">All</button>
+                            <button type="button" onclick="setSettingsGroupsScopeAll(false)" class="text-[10px] text-slate-300 border border-slate-700 rounded px-1.5 py-0.5 hover:bg-slate-700/40 cursor-pointer">None</button>
+                        </div>
+                    </div>
+                        <div class="flex flex-wrap gap-1.5">
+                            <button type="button" onclick="applySettingsGroupsScopePreset('video')" class="text-[10px] text-slate-200 border border-slate-700 rounded px-1.5 py-0.5 hover:bg-slate-700/40 cursor-pointer">Video</button>
+                            <button type="button" onclick="applySettingsGroupsScopePreset('audio')" class="text-[10px] text-slate-200 border border-slate-700 rounded px-1.5 py-0.5 hover:bg-slate-700/40 cursor-pointer">Audio</button>
+                            <button type="button" onclick="applySettingsGroupsScopePreset('timecode')" class="text-[10px] text-slate-200 border border-slate-700 rounded px-1.5 py-0.5 hover:bg-slate-700/40 cursor-pointer">Timecode</button>
+                            <button type="button" onclick="applySettingsGroupsScopePreset('slate')" class="text-[10px] text-slate-200 border border-slate-700 rounded px-1.5 py-0.5 hover:bg-slate-700/40 cursor-pointer">Slate</button>
+                        </div>
+                    <div id="sg-scope-fields" class="grid grid-cols-1 sm:grid-cols-2 gap-1 text-[11px] text-slate-300"></div>
+                </div>
+
+                <div class="rounded border border-slate-800 bg-slate-950 p-3 space-y-2">
+                    <span class="text-[11px] text-slate-400 block">Settings Editor</span>
+                    <div id="sg-settings-fields"></div>
+                </div>
+
+                <p id="settings-groups-status" class="text-[11px] text-slate-500 min-h-[1.25rem]"></p>
+            </div>
+
+            <div class="flex justify-end gap-2 border-t border-slate-800 pt-4 mt-4">
+                <button type="button" onclick="closeSettingsGroupsModal()" class="px-3 py-1.5 text-xs text-slate-400 hover:text-white rounded border border-slate-700 cursor-pointer">Close</button>
+                <button type="button" onclick="applySettingsGroupsDraftToSelected()" class="px-3 py-1.5 text-xs bg-emerald-600/20 text-emerald-300 border border-emerald-500/30 rounded hover:bg-emerald-600 hover:text-white transition cursor-pointer">Apply Draft</button>
+                <button type="button" onclick="saveSettingsGroupsGroup()" class="px-3 py-1.5 text-xs bg-indigo-600/20 text-indigo-300 border border-indigo-500/30 rounded hover:bg-indigo-600 hover:text-white transition cursor-pointer">Save Group</button>
+                <button type="button" onclick="applySettingsGroupsGroup()" class="px-3 py-1.5 text-xs bg-slate-700 text-slate-200 border border-slate-600 rounded hover:bg-slate-600 transition cursor-pointer">Apply Group</button>
+                <button type="button" onclick="deleteSettingsGroupsGroup()" class="px-3 py-1.5 text-xs text-rose-300 border border-rose-500/30 rounded hover:bg-rose-600/20 transition cursor-pointer">Delete Group</button>
             </div>
         </div>
     </div>

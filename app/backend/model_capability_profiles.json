@@ -22,6 +22,27 @@
       "AAC",
       "PCM"
     ],
+    "audio input channels": [
+      "2",
+      "4",
+      "8",
+      "16"
+    ],
+    "timecode input": [
+      "embedded",
+      "external",
+      "preset"
+    ],
+    "timecode output": [
+      "none",
+      "embedded"
+    ],
+    "audio meters": [
+      "VU (-18dBFS)",
+      "VU (-20dBFS)",
+      "PPM (-18dBFS)",
+      "PPM (-20dBFS)"
+    ],
     "default standard": [
       "1080p23.98",
       "1080p24",

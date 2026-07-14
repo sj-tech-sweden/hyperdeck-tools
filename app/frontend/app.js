@@ -10,6 +10,245 @@ const PLUGIN_SELECTION_STORAGE_KEY = 'hyperdeck.schedulePluginSelection';
 let scheduleSaveDebounceTimer = null;
 let scheduleTempRowCounter = 0;
 let deckSettingsLastFocusedElement = null;
+let settingsGroupsOptionSuggestionsCache = {};
+
+const SLATE_FIELD_CONFIG = [
+    { key: 'reel', label: 'Reel', type: 'number', min: '1', max: '999', placeholder: '1-999' },
+    { key: 'scene id', label: 'Scene ID', type: 'text', placeholder: 'e.g. 12A' },
+    { key: 'shot type', label: 'Shot Type', type: 'select', options: ['', 'WS', 'MS', 'CU', 'BCU', 'MCU', 'ECU', 'none'] },
+    { key: 'take', label: 'Take', type: 'number', min: '1', max: '99', placeholder: '1-99' },
+    { key: 'take scenario', label: 'Take Scenario', type: 'select', options: ['', 'PU', 'VFX', 'SER', 'none'] },
+    { key: 'take auto inc', label: 'Take Auto Increment', type: 'select', options: ['', 'true', 'false'] },
+    { key: 'good take', label: 'Good Take', type: 'select', options: ['', 'true', 'false'] },
+    { key: 'environment', label: 'Environment', type: 'select', options: ['', 'interior', 'exterior'] },
+    { key: 'day night', label: 'Day/Night', type: 'select', options: ['', 'day', 'night'] },
+    { key: 'project name', label: 'Project Name', type: 'text', placeholder: 'Project name' },
+    { key: 'camera', label: 'Camera', type: 'text', placeholder: 'A' },
+    { key: 'director', label: 'Director', type: 'text', placeholder: 'Director name' },
+    { key: 'camera operator', label: 'Camera Operator', type: 'text', placeholder: 'Operator name' },
+];
+
+function slateFieldClassName(prefix, key) {
+    return `${prefix}-slate-${String(key || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+}
+
+function buildSlateMetadataFromContainer(root, prefix) {
+    const metadata = {};
+    if (!root) return metadata;
+
+    SLATE_FIELD_CONFIG.forEach((field) => {
+        const el = root.querySelector(`.${slateFieldClassName(prefix, field.key)}`);
+        if (!el) return;
+        const value = String(el.value || '').trim();
+        if (value) metadata[field.key] = value;
+    });
+
+    return metadata;
+}
+
+function setSlateMetadataInContainer(root, prefix, metadata = {}) {
+    if (!root) return;
+    SLATE_FIELD_CONFIG.forEach((field) => {
+        const el = root.querySelector(`.${slateFieldClassName(prefix, field.key)}`);
+        if (!el) return;
+        el.value = String((metadata && metadata[field.key]) || '');
+    });
+}
+
+function renderSlateFieldInputs(containerId, prefix, metadata = {}, compact = false) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+
+    const colClass = compact ? 'col-span-2' : 'col-span-1';
+    const html = SLATE_FIELD_CONFIG.map((field, idx) => {
+        const klass = slateFieldClassName(prefix, field.key);
+        const current = escHtml(String((metadata && metadata[field.key]) || ''));
+        const hiddenClass = idx >= 4 ? 'slate-extra hidden' : '';
+
+        if (field.type === 'select') {
+            const options = (field.options || []).map((option) => {
+                const selected = String(option) === String((metadata && metadata[field.key]) || '') ? 'selected' : '';
+                const label = option || '— unchanged —';
+                return `<option value="${escHtml(option)}" ${selected}>${escHtml(label)}</option>`;
+            }).join('');
+
+            return `
+                <label class="${colClass} ${hiddenClass} text-xs text-slate-400 space-y-1">
+                    <span class="block">${escHtml(field.label)}</span>
+                    <select class="${klass} block w-full rounded bg-slate-950 border border-slate-800 text-xs px-2 py-1.5 text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500">
+                        ${options}
+                    </select>
+                </label>
+            `;
+        }
+
+        const attrs = [
+            field.min ? `min="${field.min}"` : '',
+            field.max ? `max="${field.max}"` : '',
+            field.placeholder ? `placeholder="${escHtml(field.placeholder)}"` : '',
+        ].filter(Boolean).join(' ');
+
+        return `
+            <label class="${colClass} ${hiddenClass} text-xs text-slate-400 space-y-1">
+                <span class="block">${escHtml(field.label)}</span>
+                <input type="${field.type}" value="${current}" ${attrs} class="${klass} block w-full rounded border border-slate-800 bg-slate-950 text-xs px-2 py-1.5 text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500">
+            </label>
+        `;
+    }).join('');
+
+    container.innerHTML = `
+        <div class="grid grid-cols-2 gap-3">${html}</div>
+        <div class="mt-1 flex justify-end">
+            <button type="button" onclick="toggleSlateFields(this)" class="text-[10px] text-indigo-400 hover:text-indigo-300 font-medium cursor-pointer">Show all fields</button>
+        </div>
+    `;
+}
+
+function toggleSlateFields(buttonEl) {
+    const root = buttonEl.closest('div');
+    if (!root) return;
+    const extras = root.querySelectorAll('.slate-extra');
+    if (!extras.length) return;
+    const shouldShow = Array.from(extras).some((el) => el.classList.contains('hidden'));
+    extras.forEach((el) => el.classList.toggle('hidden', !shouldShow));
+    buttonEl.innerText = shouldShow ? 'Show fewer fields' : 'Show all fields';
+}
+
+function toggleEventSlateFields(buttonEl) {
+    const row = buttonEl.closest('.schedule-row-item');
+    if (!row) return;
+    const extras = row.querySelectorAll('.sch-slate-extra');
+    if (!extras.length) return;
+    const shouldShow = Array.from(extras).some((el) => el.classList.contains('hidden'));
+    extras.forEach((el) => el.classList.toggle('hidden', !shouldShow));
+    buttonEl.innerText = shouldShow ? 'Show fewer fields' : 'Show all fields';
+}
+
+function toggleDeckSlateSection(section) {
+    const className = section === 'project' ? '.ds-slate-project-extra' : '.ds-slate-clip-extra';
+    const buttonId = section === 'project' ? 'btn-ds-toggle-project-slate' : 'btn-ds-toggle-clip-slate';
+    const button = document.getElementById(buttonId);
+    const extras = document.querySelectorAll(className);
+    if (!button || !extras.length) return;
+    const shouldShow = Array.from(extras).some((el) => el.classList.contains('hidden'));
+    extras.forEach((el) => el.classList.toggle('hidden', !shouldShow));
+    button.innerText = shouldShow ? 'Show fewer fields' : 'Show all fields';
+}
+
+function applySettingsGroupsScopePreset(preset) {
+    const presets = {
+        timecode: ['timecode input', 'timecode output', 'timecode preset'],
+        audio: ['audio input', 'audio codec', 'audio input channels', 'audio meters'],
+        slate: ['reel', 'scene id', 'shot type', 'take', 'take scenario', 'take auto inc', 'good take', 'environment', 'day night', 'project name', 'camera', 'director', 'camera operator'],
+        video: ['file format', 'video input', 'default standard'],
+    };
+
+    const selected = new Set((presets[preset] || []).map((k) => String(k).toLowerCase()));
+    document.querySelectorAll('.sg-scope-field-checkbox').forEach((el) => {
+        const key = String(el.value || '').trim().toLowerCase();
+        el.checked = selected.has(key);
+    });
+}
+let deckSettingsGroupsCache = {};
+let settingsGroupsLastFocusedElement = null;
+
+function formatDeckOptionsSourceLabel(source) {
+    return source === 'device'
+        ? 'device-reported'
+        : (source === 'model_profile_preferred'
+            ? 'model capability profile (preferred)'
+            : (source === 'device+model'
+                ? 'device + model profile fallback'
+                : (source === 'device_partial'
+                    ? 'device-reported (partial enumeration)'
+                    : (source === 'model_profile'
+                        ? 'model profile fallback'
+                        : 'current-values-only'))));
+}
+
+function currentSettingsGroupsFieldValues() {
+    return document.getElementById('sg-settings-fields') ? collectSettingsGroupsFieldSettings() : {};
+}
+
+function getSettingsGroupsSuggestionHost() {
+    const selectedTargets = selectedSettingsGroupsTargets();
+    if (selectedTargets.length > 0) return selectedTargets[0];
+
+    const configuredHosts = Object.values(localConfigCache.hyperdecks || {}).map((host) => String(host || '').trim()).filter(Boolean);
+    return configuredHosts[0] || '';
+}
+
+function settingsGroupsSuggestionSourceLabel(host, source) {
+    if (!host) return '';
+    const entries = Object.entries(localConfigCache.hyperdecks || {});
+    const match = entries.find(([, value]) => String(value || '').trim() === String(host));
+    const deckName = match ? String(match[0] || '').trim() : '';
+    const prefix = deckName ? `${deckName} (${host})` : host;
+    return `${prefix} · ${formatDeckOptionsSourceLabel(source)}`;
+}
+
+async function loadSettingsGroupsOptionSuggestions(host) {
+    const normalizedHost = String(host || '').trim();
+    if (!normalizedHost) return { host: '', options: {}, sourceLabel: '' };
+    if (settingsGroupsOptionSuggestionsCache[normalizedHost]) return settingsGroupsOptionSuggestionsCache[normalizedHost];
+
+    try {
+        const res = await fetch(`/api/control/${encodeURIComponent(normalizedHost)}/configuration`);
+        if (!res.ok) throw new Error('fetch failed');
+        const data = await res.json();
+        const payload = {
+            host: normalizedHost,
+            options: (data && typeof data.options === 'object' && data.options) ? data.options : {},
+            sourceLabel: settingsGroupsSuggestionSourceLabel(normalizedHost, String(data?.options_source || '')),
+        };
+        settingsGroupsOptionSuggestionsCache[normalizedHost] = payload;
+        return payload;
+    } catch (_) {
+        return { host: normalizedHost, options: {}, sourceLabel: '' };
+    }
+}
+
+async function refreshSettingsGroupsOptionSuggestions(settingsOverride = null) {
+    const host = getSettingsGroupsSuggestionHost();
+    const currentSettings = settingsOverride || currentSettingsGroupsFieldValues();
+    if (!host) {
+        renderSettingsGroupsFieldEditor(currentSettings, {}, '');
+        return;
+    }
+
+    const { options, sourceLabel } = await loadSettingsGroupsOptionSuggestions(host);
+    renderSettingsGroupsFieldEditor(currentSettings, options, sourceLabel);
+}
+
+function onSettingsGroupsTargetSelectionChanged() {
+    void refreshSettingsGroupsOptionSuggestions();
+}
+
+const DECK_SETTINGS_SCOPE_OPTIONS = [
+    { key: 'file format', label: 'File Format' },
+    { key: 'video input', label: 'Video Input' },
+    { key: 'audio input', label: 'Audio Input' },
+    { key: 'audio codec', label: 'Audio Codec' },
+    { key: 'default standard', label: 'Default Standard' },
+    { key: 'audio input channels', label: 'Audio Channels' },
+    { key: 'timecode input', label: 'Timecode Input' },
+    { key: 'timecode output', label: 'Timecode Output' },
+    { key: 'timecode preset', label: 'Timecode Preset' },
+    { key: 'audio meters', label: 'Audio Meters' },
+    { key: 'reel', label: 'Reel' },
+    { key: 'scene id', label: 'Scene ID' },
+    { key: 'shot type', label: 'Shot Type' },
+    { key: 'take', label: 'Take' },
+    { key: 'take scenario', label: 'Take Scenario' },
+    { key: 'take auto inc', label: 'Take Auto Inc' },
+    { key: 'good take', label: 'Good Take' },
+    { key: 'environment', label: 'Environment' },
+    { key: 'day night', label: 'Day/Night' },
+    { key: 'project name', label: 'Project Name' },
+    { key: 'camera', label: 'Camera' },
+    { key: 'director', label: 'Director' },
+    { key: 'camera operator', label: 'Camera Operator' },
+];
 
 function createTempRowKey() {
     scheduleTempRowCounter += 1;
@@ -115,25 +354,7 @@ function insertEventSlateTemplate(buttonEl) {
     const row = buttonEl.closest('.schedule-row-item');
     if (!row) return;
 
-    const textarea = row.querySelector('.sch-slate-meta');
-    if (!textarea) return;
-
-    let existing = {};
-    const raw = (textarea.value || '').trim();
-    if (raw) {
-        try {
-            const parsed = JSON.parse(raw);
-            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-                existing = parsed;
-            } else {
-                alert('Per-event slate metadata must be a JSON object.');
-                return;
-            }
-        } catch (_) {
-            alert('Per-event slate metadata must be valid JSON before inserting a template.');
-            return;
-        }
-    }
+    const existing = buildSlateMetadataFromContainer(row, 'sch');
 
     // Fill only missing keys so user-entered values are preserved.
     const template = {
@@ -148,7 +369,7 @@ function insertEventSlateTemplate(buttonEl) {
     };
 
     const merged = { ...template, ...existing };
-    textarea.value = JSON.stringify(merged, null, 2);
+    setSlateMetadataInContainer(row, 'sch', merged);
 }
 
 function updateAutoModeBadge() {
@@ -194,21 +415,9 @@ function getVisibleScheduleRowsFromDOM() {
         const date = el.querySelector('.sch-date')?.value || '';
         const time = el.querySelector('.sch-time')?.value || '';
         const stage = normalizeStageName(el.querySelector('.sch-stage')?.value || '');
-        const slateRaw = el.querySelector('.sch-slate-meta')?.value || '';
         const start_time = date && time ? `${date} ${time}` : (date || time || '');
         const domKey = decodeURIComponent(el.dataset.rowKey || '');
-
-        let slate_metadata = {};
-        if (slateRaw.trim()) {
-            try {
-                const parsed = JSON.parse(slateRaw);
-                if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-                    slate_metadata = parsed;
-                }
-            } catch (_) {
-                // Save-time validation handles invalid JSON feedback.
-            }
-        }
+        const slate_metadata = buildSlateMetadataFromContainer(el, 'sch');
 
         let resolvedId = id;
         if (!resolvedId && start_time) {
@@ -341,97 +550,22 @@ function ensureConfigShape(config) {
     return safe;
 }
 
-function readJsonObjectField(fieldId, label) {
-    const el = document.getElementById(fieldId);
-    if (!el) return {};
-    const raw = (el.value || '').trim();
-    if (!raw) return {};
-
-    let parsed;
-    try {
-        parsed = JSON.parse(raw);
-    } catch (_) {
-        throw new Error(`${label} must be valid JSON.`);
-    }
-
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-        throw new Error(`${label} must be a JSON object.`);
-    }
-    return parsed;
-}
-
 function insertSlateGlobalTemplate() {
-    const textarea = document.getElementById('cfg-slate-global');
-    if (!textarea) return;
-
-    let existing = {};
-    const raw = (textarea.value || '').trim();
-    if (raw) {
-        try {
-            const parsed = JSON.parse(raw);
-            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-                existing = parsed;
-            } else {
-                alert('Slate global metadata must be a JSON object.');
-                return;
-            }
-        } catch (_) {
-            alert('Slate global metadata must be valid JSON before inserting a template.');
-            return;
-        }
-    }
+    const container = document.getElementById('cfg-slate-global-fields');
+    if (!container) return;
+    const existing = buildSlateMetadataFromContainer(container, 'cfg-global');
 
     const template = {
         'project name': 'Production Name',
         'director': 'Director Name',
         'camera operator': '',
     };
-    textarea.value = JSON.stringify({ ...template, ...existing }, null, 2);
+    setSlateMetadataInContainer(container, 'cfg-global', { ...template, ...existing });
 }
 
 function insertSlatePerDeckTemplate() {
-    const textarea = document.getElementById('cfg-slate-per-deck');
-    if (!textarea) return;
-
-    let existing = {};
-    const raw = (textarea.value || '').trim();
-    if (raw) {
-        try {
-            const parsed = JSON.parse(raw);
-            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-                existing = parsed;
-            } else {
-                alert('Slate per-deck metadata must be a JSON object.');
-                return;
-            }
-        } catch (_) {
-            alert('Slate per-deck metadata must be valid JSON before inserting a template.');
-            return;
-        }
-    }
-
-    const defaultDeckTemplate = {
-        MainDeck: {
-            camera: 'A',
-            'camera operator': '',
-        },
-        YouthDeck: {
-            camera: 'B',
-            'camera operator': '',
-        },
-    };
-
-    // Merge per deck while preserving user values where already present.
-    const merged = { ...defaultDeckTemplate, ...existing };
-    Object.keys(defaultDeckTemplate).forEach((deckKey) => {
-        const deckTemplate = defaultDeckTemplate[deckKey];
-        const current = merged[deckKey];
-        if (current && typeof current === 'object' && !Array.isArray(current)) {
-            merged[deckKey] = { ...deckTemplate, ...current };
-        }
-    });
-
-    textarea.value = JSON.stringify(merged, null, 2);
+    // Kept for backwards compatibility with existing button bindings if any remain.
+    alert('Per-deck slate metadata is configured in each Deck Settings panel.');
 }
 
 function updateStageModeUI() {
@@ -570,8 +704,7 @@ async function pullConfigurationMatrix() {
         document.getElementById('cfg-global-stage').value = localConfigCache.global_stage;
         document.getElementById('cfg-auto-mode').value = localConfigCache.schedule_auto_mode ? 'true' : 'false';
         document.getElementById('cfg-drift-minutes').value = localConfigCache.schedule_max_drift_minutes;
-        document.getElementById('cfg-slate-global').value = JSON.stringify(localConfigCache.slate_metadata.global || {}, null, 2);
-        document.getElementById('cfg-slate-per-deck').value = JSON.stringify(localConfigCache.slate_metadata.per_deck || {}, null, 2);
+        renderSlateFieldInputs('cfg-slate-global-fields', 'cfg-global', localConfigCache.slate_metadata.global || {}, false);
         const slateStatus = document.getElementById('cfg-slate-status');
         if (slateStatus) slateStatus.innerText = 'Slate metadata is optional.';
 
@@ -658,16 +791,8 @@ async function saveConfigToServer() {
     const schedule_max_drift_minutes = Number.parseInt(document.getElementById('cfg-drift-minutes').value || '45', 10);
     const slateStatus = document.getElementById('cfg-slate-status');
 
-    let slateGlobal = {};
-    let slatePerDeck = {};
-    try {
-        slateGlobal = readJsonObjectField('cfg-slate-global', 'Slate global metadata');
-        slatePerDeck = readJsonObjectField('cfg-slate-per-deck', 'Slate per-deck metadata');
-    } catch (e) {
-        if (slateStatus) slateStatus.innerText = e.message;
-        alert(e.message);
-        return;
-    }
+    const slateGlobalRoot = document.getElementById('cfg-slate-global-fields');
+    const slateGlobal = buildSlateMetadataFromContainer(slateGlobalRoot, 'cfg-global');
     
     const destinations = [];
     document.querySelectorAll('.row-destination-item').forEach(el => {
@@ -698,7 +823,7 @@ async function saveConfigToServer() {
         schedule_max_drift_minutes: Number.isFinite(schedule_max_drift_minutes) ? Math.max(0, schedule_max_drift_minutes) : 45,
         slate_metadata: {
             global: slateGlobal,
-            per_deck: slatePerDeck,
+            per_deck: {},
             per_event: {},
         },
     };
@@ -882,18 +1007,7 @@ async function selectActiveEventContext(id, plannedTitle) {
                 const schDate = el.querySelector('.sch-date')?.value || '';
                 const schTime = el.querySelector('.sch-time')?.value || '';
                 const schStage = el.querySelector('.sch-stage')?.value || '';
-                let schSlateMetadata = {};
-                const schSlateRaw = el.querySelector('.sch-slate-meta')?.value || '';
-                if (schSlateRaw.trim()) {
-                    try {
-                        const parsed = JSON.parse(schSlateRaw);
-                        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-                            schSlateMetadata = parsed;
-                        }
-                    } catch (_) {
-                        schSlateMetadata = {};
-                    }
-                }
+                const schSlateMetadata = buildSlateMetadataFromContainer(el, 'sch');
                 const schStart = schDate && schTime ? `${schDate} ${schTime}` : '';
                 if (schId || schTitle || schStart) {
                     currentItems.push({ id: schId, planned_title: schTitle, start_time: schStart, stage: schStage, slate_metadata: schSlateMetadata });
@@ -912,7 +1026,7 @@ function createScheduleRowElement(item = { id: '', planned_title: '' }) {
     const startTime = (item.start_time || '').trim();
     const { datePart, timePart } = splitStartTimeParts(startTime);
     const stage = normalizeStageName(item.stage);
-    const slateMetadataText = JSON.stringify(item.slate_metadata || {}, null, 2);
+    const slateMetadata = item.slate_metadata || {};
     const inScope = isScheduleItemInScope(item);
     const stableRowKey = item._row_key || scheduleItemKey(item) || createTempRowKey();
     const rowKey = encodeURIComponent(stableRowKey);
@@ -955,10 +1069,43 @@ function createScheduleRowElement(item = { id: '', planned_title: '' }) {
         </div>
         <div class="mt-2">
             <label class="text-[10px] text-slate-400 space-y-1 block">
-                <span class="block">Per-Event Slate Metadata (JSON) ${hintBadge('Optional JSON object used when this event is matched during record.')}</span>
-                <textarea class="sch-slate-meta block w-full rounded border border-slate-800 bg-slate-950 px-2 py-1.5 text-[11px] font-mono text-slate-200 focus:outline-none" rows="3" spellcheck="false" placeholder='{"scene id":"OPN","day night":"day"}'>${escHtml(slateMetadataText)}</textarea>
+                <span class="block">Per-Event Slate Metadata ${hintBadge('Optional per-event metadata used when this event is matched during record.')}</span>
+                <div class="grid grid-cols-2 gap-2">
+                    ${SLATE_FIELD_CONFIG.map((field, idx) => {
+                        const klass = slateFieldClassName('sch', field.key);
+                        const current = escHtml(String(slateMetadata[field.key] || ''));
+                        const hiddenClass = idx >= 4 ? 'sch-slate-extra hidden' : '';
+                        if (field.type === 'select') {
+                            const options = (field.options || []).map((option) => {
+                                const selected = String(option) === String(slateMetadata[field.key] || '') ? 'selected' : '';
+                                const label = option || '—';
+                                return `<option value="${escHtml(option)}" ${selected}>${escHtml(label)}</option>`;
+                            }).join('');
+                            return `
+                                <label class="${hiddenClass} text-[10px] text-slate-400 space-y-1">
+                                    <span class="block">${escHtml(field.label)}</span>
+                                    <select class="${klass} block w-full rounded bg-slate-950 border border-slate-800 text-[11px] px-2 py-1 text-slate-200 focus:outline-none">
+                                        ${options}
+                                    </select>
+                                </label>
+                            `;
+                        }
+                        const attrs = [
+                            field.min ? `min="${field.min}"` : '',
+                            field.max ? `max="${field.max}"` : '',
+                            field.placeholder ? `placeholder="${escHtml(field.placeholder)}"` : '',
+                        ].filter(Boolean).join(' ');
+                        return `
+                            <label class="${hiddenClass} text-[10px] text-slate-400 space-y-1">
+                                <span class="block">${escHtml(field.label)}</span>
+                                <input type="${field.type}" value="${current}" ${attrs} class="${klass} block w-full rounded border border-slate-800 bg-slate-950 text-[11px] px-2 py-1 text-slate-200 focus:outline-none">
+                            </label>
+                        `;
+                    }).join('')}
+                </div>
             </label>
-            <div class="mt-1 flex justify-end">
+            <div class="mt-1 flex justify-end gap-2">
+                <button type="button" onclick="toggleEventSlateFields(this)" class="text-[10px] text-slate-400 hover:text-slate-200 font-medium cursor-pointer">Show all fields</button>
                 <button type="button" onclick="insertEventSlateTemplate(this)" class="text-[10px] text-indigo-400 hover:text-indigo-300 font-medium cursor-pointer">Insert Slate Template</button>
             </div>
         </div>
@@ -1038,32 +1185,6 @@ function renderScheduleMatrix(schedule = [], preserveCache = false) {
 async function saveScheduleFromMatrix() {
     mergeVisibleRowsIntoCache();
     const syncStatus = document.getElementById('plugin-sync-status');
-
-    // Validate per-event JSON blobs before sending to backend.
-    for (const rowEl of document.querySelectorAll('.schedule-row-item')) {
-        const slateField = rowEl.querySelector('.sch-slate-meta');
-        if (!slateField) continue;
-
-        const raw = (slateField.value || '').trim();
-        if (!raw) {
-            slateField.classList.remove('ring-1', 'ring-rose-500');
-            continue;
-        }
-
-        try {
-            const parsed = JSON.parse(raw);
-            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-                throw new Error('not object');
-            }
-            slateField.classList.remove('ring-1', 'ring-rose-500');
-        } catch (_) {
-            slateField.classList.add('ring-1', 'ring-rose-500');
-            if (syncStatus) {
-                syncStatus.innerText = 'Schedule not saved: each Per-Event Slate Metadata field must contain a JSON object.';
-            }
-            return;
-        }
-    }
 
     const normalizedRows = scheduleDataCache
         .map((row, idx) => {
@@ -1426,10 +1547,692 @@ function applyDeckSettingOptions(options = {}) {
         'audio input': 'ds-audio-input',
         'audio codec': 'ds-audio-codec',
         'default standard': 'ds-default-standard',
+        'audio input channels': 'ds-audio-input-channels',
+        'timecode input': 'ds-timecode-input',
+        'timecode output': 'ds-timecode-output',
+        'audio meters': 'ds-audio-meters',
     };
     Object.entries(fieldMap).forEach(([key, selectId]) => {
         setDeckSettingSelectOptions(selectId, Array.isArray(options[key]) ? options[key] : []);
     });
+}
+
+function collectDeckSettingsValues() {
+    const settings = {};
+    const fieldMap = {
+        'ds-file-format': 'file format',
+        'ds-video-input': 'video input',
+        'ds-audio-input': 'audio input',
+        'ds-audio-codec': 'audio codec',
+        'ds-default-standard': 'default standard',
+        'ds-audio-input-channels': 'audio input channels',
+        'ds-timecode-input': 'timecode input',
+        'ds-timecode-output': 'timecode output',
+        'ds-timecode-preset': 'timecode preset',
+        'ds-audio-meters': 'audio meters',
+        'ds-slate-reel': 'reel',
+        'ds-scene-id': 'scene id',
+        'ds-shot-type': 'shot type',
+        'ds-take': 'take',
+        'ds-take-scenario': 'take scenario',
+        'ds-take-auto-inc': 'take auto inc',
+        'ds-good-take': 'good take',
+        'ds-environment': 'environment',
+        'ds-day-night': 'day night',
+        'ds-project-name': 'project name',
+        'ds-camera': 'camera',
+        'ds-director': 'director',
+        'ds-camera-operator': 'camera operator',
+    };
+
+    Object.entries(fieldMap).forEach(([elId, key]) => {
+        const el = document.getElementById(elId);
+        if (!el) return;
+        const value = String(el.value || '').trim();
+        if (value) settings[key] = value;
+    });
+    return settings;
+}
+
+function renderDeckSettingsTargetHosts() {
+    const hostListEl = document.getElementById('ds-target-hosts');
+    if (!hostListEl) return;
+    hostListEl.innerHTML = '';
+
+    const decks = localConfigCache.hyperdecks || {};
+    const entries = Object.entries(decks);
+    if (entries.length === 0) {
+        hostListEl.innerHTML = '<span class="text-slate-500 italic">No configured decks.</span>';
+        return;
+    }
+
+    entries.forEach(([name, host]) => {
+        const id = `ds-target-${String(host).replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+        const checked = String(host) === activeDeckSettingsHost ? 'checked' : '';
+        const row = document.createElement('label');
+        row.className = 'inline-flex items-center gap-2';
+        row.innerHTML = `
+            <input id="${id}" type="checkbox" class="ds-target-host-checkbox h-3.5 w-3.5 rounded border-slate-700 bg-slate-900" value="${escHtml(String(host))}" ${checked}>
+            <span class="truncate">${escHtml(String(name))} <span class="text-slate-500">(${escHtml(String(host))})</span></span>
+        `;
+        hostListEl.appendChild(row);
+    });
+}
+
+function selectedDeckSettingsTargetHosts() {
+    return Array.from(document.querySelectorAll('.ds-target-host-checkbox:checked')).map((el) => String(el.value || '').trim()).filter(Boolean);
+}
+
+function renderDeckSettingsScopeToggles(selectedKeys = []) {
+    const root = document.getElementById('ds-scope-fields');
+    if (!root) return;
+
+    const selected = new Set((selectedKeys.length ? selectedKeys : DECK_SETTINGS_SCOPE_OPTIONS.map((i) => i.key)).map((k) => String(k || '').trim().toLowerCase()));
+    root.innerHTML = '';
+
+    DECK_SETTINGS_SCOPE_OPTIONS.forEach((item) => {
+        const checkboxId = `ds-scope-${item.key.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+        const checked = selected.has(item.key.toLowerCase()) ? 'checked' : '';
+        const row = document.createElement('label');
+        row.className = 'inline-flex items-center gap-2';
+        row.innerHTML = `
+            <input id="${checkboxId}" type="checkbox" class="ds-scope-field-checkbox h-3.5 w-3.5 rounded border-slate-700 bg-slate-900" value="${escHtml(item.key)}" ${checked}>
+            <span>${escHtml(item.label)}</span>
+        `;
+        root.appendChild(row);
+    });
+}
+
+function selectedDeckSettingsScopeKeys() {
+    return Array.from(document.querySelectorAll('.ds-scope-field-checkbox:checked')).map((el) => String(el.value || '').trim().toLowerCase()).filter(Boolean);
+}
+
+function setDeckSettingsScopeAll(selectAll) {
+    document.querySelectorAll('.ds-scope-field-checkbox').forEach((el) => {
+        el.checked = !!selectAll;
+    });
+}
+
+function filterDeckSettingsByScope(settings) {
+    const scopeKeys = new Set(selectedDeckSettingsScopeKeys());
+    if (scopeKeys.size === 0) return {};
+    const filtered = {};
+    Object.entries(settings || {}).forEach(([key, value]) => {
+        if (scopeKeys.has(String(key || '').trim().toLowerCase())) filtered[key] = value;
+    });
+    return filtered;
+}
+
+function renderDeckSettingsGroupOptions() {
+    const groupSelect = document.getElementById('ds-group-select');
+    if (!groupSelect) return;
+
+    const current = groupSelect.value;
+    groupSelect.innerHTML = '<option value="">Select group...</option>';
+    Object.keys(deckSettingsGroupsCache).sort((a, b) => a.localeCompare(b)).forEach((name) => {
+        const option = document.createElement('option');
+        option.value = name;
+        option.textContent = name;
+        groupSelect.appendChild(option);
+    });
+    if (current && deckSettingsGroupsCache[current]) groupSelect.value = current;
+}
+
+async function loadDeckSettingsGroups() {
+    try {
+        const res = await fetch('/api/control/settings-groups');
+        if (!res.ok) {
+            deckSettingsGroupsCache = {};
+            renderDeckSettingsGroupOptions();
+            return;
+        }
+        const data = await res.json();
+        deckSettingsGroupsCache = (data && typeof data.groups === 'object' && data.groups) ? data.groups : {};
+        renderDeckSettingsGroupOptions();
+    } catch (_) {
+        deckSettingsGroupsCache = {};
+        renderDeckSettingsGroupOptions();
+    }
+}
+
+function onDeckSettingsGroupSelected() {
+    const groupSelect = document.getElementById('ds-group-select');
+    const nameEl = document.getElementById('ds-group-name');
+    const selectedName = String(groupSelect?.value || '').trim();
+    if (!selectedName || !deckSettingsGroupsCache[selectedName]) return;
+
+    const group = deckSettingsGroupsCache[selectedName] || {};
+    const fieldKeys = Array.isArray(group.field_keys) ? group.field_keys : [];
+    if (nameEl) nameEl.value = selectedName;
+    renderDeckSettingsScopeToggles(fieldKeys);
+}
+
+async function applyDeckSettingsToSelectedTargets() {
+    const statusEl = document.getElementById('deck-settings-status');
+    const targets = selectedDeckSettingsTargetHosts();
+    const settings = filterDeckSettingsByScope(collectDeckSettingsValues());
+
+    if (targets.length === 0) {
+        if (statusEl) statusEl.innerText = 'Select at least one target deck first.';
+        return;
+    }
+    if (Object.keys(settings).length === 0) {
+        if (statusEl) statusEl.innerText = 'No settings selected to apply.';
+        return;
+    }
+
+    if (statusEl) statusEl.innerText = `Applying ${Object.keys(settings).length} setting(s) to ${targets.length} deck(s)...`;
+    try {
+        const res = await fetch('/api/control/apply-settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ targets, settings }),
+        });
+        let data;
+        try { data = await res.json(); } catch (_) { data = {}; }
+
+        if (!res.ok) {
+            if (statusEl) statusEl.innerText = `Apply failed: ${data.detail || 'Unknown error'}`;
+            return;
+        }
+
+        const successCount = Number(data.success_count || 0);
+        if (statusEl) statusEl.innerText = `Applied to ${successCount}/${targets.length} deck(s).`;
+    } catch (_) {
+        if (statusEl) statusEl.innerText = 'Apply failed: Could not reach backend API.';
+    }
+}
+
+async function saveDeckSettingsGroup() {
+    const statusEl = document.getElementById('deck-settings-status');
+    const nameEl = document.getElementById('ds-group-name');
+    const targets = selectedDeckSettingsTargetHosts();
+    const settings = filterDeckSettingsByScope(collectDeckSettingsValues());
+    const field_keys = selectedDeckSettingsScopeKeys();
+    const name = String(nameEl?.value || '').trim();
+
+    if (!name) {
+        if (statusEl) statusEl.innerText = 'Enter a group name first.';
+        return;
+    }
+    if (targets.length === 0) {
+        if (statusEl) statusEl.innerText = 'Select at least one target deck for the group.';
+        return;
+    }
+    if (Object.keys(settings).length === 0) {
+        if (statusEl) statusEl.innerText = 'No settings selected to save in group.';
+        return;
+    }
+    if (field_keys.length === 0) {
+        if (statusEl) statusEl.innerText = 'Select at least one field in Field Scope.';
+        return;
+    }
+
+    try {
+        const res = await fetch('/api/control/settings-groups', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, targets, settings, field_keys }),
+        });
+        let data;
+        try { data = await res.json(); } catch (_) { data = {}; }
+
+        if (!res.ok) {
+            if (statusEl) statusEl.innerText = `Save group failed: ${data.detail || 'Unknown error'}`;
+            return;
+        }
+
+        if (nameEl) nameEl.value = '';
+        await loadDeckSettingsGroups();
+        const selectEl = document.getElementById('ds-group-select');
+        if (selectEl) selectEl.value = name;
+        onDeckSettingsGroupSelected();
+        if (statusEl) statusEl.innerText = `Saved settings group '${name}'.`;
+    } catch (_) {
+        if (statusEl) statusEl.innerText = 'Save group failed: Could not reach backend API.';
+    }
+}
+
+async function applyDeckSettingsGroup() {
+    const statusEl = document.getElementById('deck-settings-status');
+    const selectEl = document.getElementById('ds-group-select');
+    const name = String(selectEl?.value || '').trim();
+    if (!name) {
+        if (statusEl) statusEl.innerText = 'Select a group to apply.';
+        return;
+    }
+
+    try {
+        const res = await fetch(`/api/control/settings-groups/${encodeURIComponent(name)}/apply`, { method: 'POST' });
+        let data;
+        try { data = await res.json(); } catch (_) { data = {}; }
+        if (!res.ok) {
+            if (statusEl) statusEl.innerText = `Apply group failed: ${data.detail || 'Unknown error'}`;
+            return;
+        }
+        const results = Array.isArray(data.results) ? data.results : [];
+        const successCount = results.filter((r) => r && r.success).length;
+        if (statusEl) statusEl.innerText = `Applied group '${name}' to ${successCount}/${results.length} deck(s).`;
+    } catch (_) {
+        if (statusEl) statusEl.innerText = 'Apply group failed: Could not reach backend API.';
+    }
+}
+
+async function deleteDeckSettingsGroup() {
+    const statusEl = document.getElementById('deck-settings-status');
+    const selectEl = document.getElementById('ds-group-select');
+    const name = String(selectEl?.value || '').trim();
+    if (!name) {
+        if (statusEl) statusEl.innerText = 'Select a group to delete.';
+        return;
+    }
+    if (!window.confirm(`Delete settings group '${name}'?`)) return;
+
+    try {
+        const res = await fetch(`/api/control/settings-groups/${encodeURIComponent(name)}`, { method: 'DELETE' });
+        let data;
+        try { data = await res.json(); } catch (_) { data = {}; }
+        if (!res.ok) {
+            if (statusEl) statusEl.innerText = `Delete group failed: ${data.detail || 'Unknown error'}`;
+            return;
+        }
+        await loadDeckSettingsGroups();
+        renderDeckSettingsScopeToggles();
+        if (statusEl) statusEl.innerText = `Deleted group '${name}'.`;
+    } catch (_) {
+        if (statusEl) statusEl.innerText = 'Delete group failed: Could not reach backend API.';
+    }
+}
+
+function renderSettingsGroupsTargetHosts(selectedHosts = []) {
+    const hostListEl = document.getElementById('sg-target-hosts');
+    if (!hostListEl) return;
+    hostListEl.innerHTML = '';
+
+    const selected = new Set((selectedHosts || []).map((h) => String(h || '').trim()));
+    const decks = localConfigCache.hyperdecks || {};
+    const entries = Object.entries(decks);
+    if (entries.length === 0) {
+        hostListEl.innerHTML = '<span class="text-slate-500 italic">No configured decks.</span>';
+        return;
+    }
+
+    entries.forEach(([name, host]) => {
+        const id = `sg-target-${String(host).replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+        const checked = selected.has(String(host)) ? 'checked' : '';
+        const row = document.createElement('label');
+        row.className = 'inline-flex items-center gap-2';
+        row.innerHTML = `
+            <input id="${id}" type="checkbox" class="sg-target-host-checkbox h-3.5 w-3.5 rounded border-slate-700 bg-slate-900" value="${escHtml(String(host))}" ${checked} onchange="onSettingsGroupsTargetSelectionChanged()">
+            <span class="truncate">${escHtml(String(name))} <span class="text-slate-500">(${escHtml(String(host))})</span></span>
+        `;
+        hostListEl.appendChild(row);
+    });
+}
+
+function selectedSettingsGroupsTargets() {
+    return Array.from(document.querySelectorAll('.sg-target-host-checkbox:checked')).map((el) => String(el.value || '').trim()).filter(Boolean);
+}
+
+function setSettingsGroupsTargetsAll(selectAll) {
+    document.querySelectorAll('.sg-target-host-checkbox').forEach((el) => {
+        el.checked = !!selectAll;
+    });
+}
+
+function renderSettingsGroupsScopeFields(selectedKeys = []) {
+    const root = document.getElementById('sg-scope-fields');
+    if (!root) return;
+    const selected = new Set((selectedKeys.length ? selectedKeys : DECK_SETTINGS_SCOPE_OPTIONS.map((i) => i.key)).map((k) => String(k || '').trim().toLowerCase()));
+    root.innerHTML = '';
+
+    DECK_SETTINGS_SCOPE_OPTIONS.forEach((item) => {
+        const checkboxId = `sg-scope-${item.key.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+        const checked = selected.has(item.key.toLowerCase()) ? 'checked' : '';
+        const row = document.createElement('label');
+        row.className = 'inline-flex items-center gap-2';
+        row.innerHTML = `
+            <input id="${checkboxId}" type="checkbox" class="sg-scope-field-checkbox h-3.5 w-3.5 rounded border-slate-700 bg-slate-900" value="${escHtml(item.key)}" ${checked}>
+            <span>${escHtml(item.label)}</span>
+        `;
+        root.appendChild(row);
+    });
+}
+
+function selectedSettingsGroupsScopeKeys() {
+    return Array.from(document.querySelectorAll('.sg-scope-field-checkbox:checked')).map((el) => String(el.value || '').trim().toLowerCase()).filter(Boolean);
+}
+
+function setSettingsGroupsScopeAll(selectAll) {
+    document.querySelectorAll('.sg-scope-field-checkbox').forEach((el) => {
+        el.checked = !!selectAll;
+    });
+}
+
+function renderSettingsGroupsFieldEditor(settings = {}, optionSuggestions = {}, sourceLabel = '') {
+    const container = document.getElementById('sg-settings-fields');
+    if (!container) return;
+
+    const fieldDefs = [
+        { id: 'sg-file-format', key: 'file format', label: 'File Format', type: 'text', placeholder: 'H.264High' },
+        { id: 'sg-video-input', key: 'video input', label: 'Video Input', type: 'text', placeholder: 'SDI' },
+        { id: 'sg-audio-input', key: 'audio input', label: 'Audio Input', type: 'text', placeholder: 'embedded' },
+        { id: 'sg-audio-codec', key: 'audio codec', label: 'Audio Codec', type: 'text', placeholder: 'AAC' },
+        { id: 'sg-default-standard', key: 'default standard', label: 'Default Standard', type: 'text', placeholder: '1080p50' },
+        { id: 'sg-audio-input-channels', key: 'audio input channels', label: 'Audio Channels', type: 'text', placeholder: '2' },
+        { id: 'sg-timecode-input', key: 'timecode input', label: 'Timecode Input', type: 'text', placeholder: 'preset' },
+        { id: 'sg-timecode-output', key: 'timecode output', label: 'Timecode Output', type: 'text', placeholder: 'embedded' },
+        { id: 'sg-timecode-preset', key: 'timecode preset', label: 'Timecode Preset', type: 'text', placeholder: '00:00:00:00' },
+        {
+            id: 'sg-audio-meters',
+            key: 'audio meters',
+            label: 'Audio Meters',
+            type: 'text',
+            placeholder: 'VU (-18dBFS)',
+            suggestions: ['VU (-18dBFS)', 'VU (-20dBFS)', 'PPM (-18dBFS)', 'PPM (-20dBFS)'],
+        },
+        { id: 'sg-reel', key: 'reel', label: 'Reel', type: 'text', placeholder: '1' },
+        { id: 'sg-scene-id', key: 'scene id', label: 'Scene ID', type: 'text', placeholder: '12A' },
+        { id: 'sg-shot-type', key: 'shot type', label: 'Shot Type', type: 'text', placeholder: 'WS' },
+        { id: 'sg-take', key: 'take', label: 'Take', type: 'text', placeholder: '1' },
+        { id: 'sg-take-scenario', key: 'take scenario', label: 'Take Scenario', type: 'text', placeholder: 'PU' },
+        { id: 'sg-take-auto-inc', key: 'take auto inc', label: 'Take Auto Inc', type: 'text', placeholder: 'true' },
+        { id: 'sg-good-take', key: 'good take', label: 'Good Take', type: 'text', placeholder: 'false' },
+        { id: 'sg-environment', key: 'environment', label: 'Environment', type: 'text', placeholder: 'interior' },
+        { id: 'sg-day-night', key: 'day night', label: 'Day/Night', type: 'text', placeholder: 'day' },
+        { id: 'sg-project-name', key: 'project name', label: 'Project Name', type: 'text', placeholder: 'Production Name' },
+        { id: 'sg-camera', key: 'camera', label: 'Camera', type: 'text', placeholder: 'A' },
+        { id: 'sg-director', key: 'director', label: 'Director', type: 'text', placeholder: 'Director Name' },
+        { id: 'sg-camera-operator', key: 'camera operator', label: 'Camera Operator', type: 'text', placeholder: 'Operator Name' },
+    ];
+
+    container.innerHTML = `
+        ${sourceLabel ? `<div class="mb-2 text-[10px] text-slate-500">Suggestions from ${escHtml(sourceLabel)}</div>` : ''}
+        <div class="grid grid-cols-2 gap-2">${fieldDefs.map((field) => {
+        const dynamicSuggestions = Array.isArray(optionSuggestions[field.key]) ? optionSuggestions[field.key] : [];
+        const mergedSuggestions = [...new Set([...(field.suggestions || []), ...dynamicSuggestions].map((value) => String(value || '').trim()).filter(Boolean))];
+        const datalistId = mergedSuggestions.length ? `${field.id}-options` : '';
+        const listAttr = datalistId ? ` list="${datalistId}"` : '';
+        const datalistHtml = datalistId
+            ? `<datalist id="${datalistId}">${mergedSuggestions.map((option) => `<option value="${escHtml(option)}"></option>`).join('')}</datalist>`
+            : '';
+        return `
+        <label class="text-[10px] text-slate-400 space-y-1">
+            <span class="block">${escHtml(field.label)}</span>
+            <input id="${field.id}" type="${field.type}"${listAttr} value="${escHtml(String(settings[field.key] || ''))}" placeholder="${escHtml(field.placeholder)}" class="block w-full rounded border border-slate-800 bg-slate-900 text-[11px] px-2 py-1.5 text-slate-200 focus:outline-none">
+            ${datalistHtml}
+        </label>
+    `;
+    }).join('')}</div>`;
+}
+
+function collectSettingsGroupsFieldSettings() {
+    const fieldMap = {
+        'sg-file-format': 'file format',
+        'sg-video-input': 'video input',
+        'sg-audio-input': 'audio input',
+        'sg-audio-codec': 'audio codec',
+        'sg-default-standard': 'default standard',
+        'sg-audio-input-channels': 'audio input channels',
+        'sg-timecode-input': 'timecode input',
+        'sg-timecode-output': 'timecode output',
+        'sg-timecode-preset': 'timecode preset',
+        'sg-audio-meters': 'audio meters',
+        'sg-reel': 'reel',
+        'sg-scene-id': 'scene id',
+        'sg-shot-type': 'shot type',
+        'sg-take': 'take',
+        'sg-take-scenario': 'take scenario',
+        'sg-take-auto-inc': 'take auto inc',
+        'sg-good-take': 'good take',
+        'sg-environment': 'environment',
+        'sg-day-night': 'day night',
+        'sg-project-name': 'project name',
+        'sg-camera': 'camera',
+        'sg-director': 'director',
+        'sg-camera-operator': 'camera operator',
+    };
+
+    const settings = {};
+    Object.entries(fieldMap).forEach(([id, key]) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        const value = String(el.value || '').trim();
+        if (value) settings[key] = value;
+    });
+    return settings;
+}
+
+function filterSettingsGroupsDraftByScope(settings) {
+    const scope = new Set(selectedSettingsGroupsScopeKeys());
+    if (scope.size === 0) return {};
+    const filtered = {};
+    Object.entries(settings || {}).forEach(([key, value]) => {
+        if (scope.has(String(key || '').trim().toLowerCase())) filtered[key] = value;
+    });
+    return filtered;
+}
+
+function renderSettingsGroupsSelect() {
+    const select = document.getElementById('sg-group-select');
+    if (!select) return;
+    const current = select.value;
+    select.innerHTML = '<option value="">Select group...</option>';
+    Object.keys(deckSettingsGroupsCache).sort((a, b) => a.localeCompare(b)).forEach((name) => {
+        const option = document.createElement('option');
+        option.value = name;
+        option.textContent = name;
+        select.appendChild(option);
+    });
+    if (current && deckSettingsGroupsCache[current]) select.value = current;
+}
+
+async function loadSettingsGroupsModalGroups() {
+    try {
+        const res = await fetch('/api/control/settings-groups');
+        if (!res.ok) {
+            deckSettingsGroupsCache = {};
+            renderSettingsGroupsSelect();
+            return;
+        }
+        const data = await res.json();
+        deckSettingsGroupsCache = (data && typeof data.groups === 'object' && data.groups) ? data.groups : {};
+        renderSettingsGroupsSelect();
+    } catch (_) {
+        deckSettingsGroupsCache = {};
+        renderSettingsGroupsSelect();
+    }
+}
+
+function onSettingsGroupsGroupSelected() {
+    const select = document.getElementById('sg-group-select');
+    const name = String(select?.value || '').trim();
+    const statusEl = document.getElementById('settings-groups-status');
+    if (!name || !deckSettingsGroupsCache[name]) return;
+
+    const group = deckSettingsGroupsCache[name] || {};
+    const nameEl = document.getElementById('sg-group-name');
+    if (nameEl) nameEl.value = name;
+    renderSettingsGroupsFieldEditor(group.settings || {});
+
+    renderSettingsGroupsTargetHosts(Array.isArray(group.targets) ? group.targets : []);
+    renderSettingsGroupsScopeFields(Array.isArray(group.field_keys) ? group.field_keys : []);
+    void refreshSettingsGroupsOptionSuggestions(group.settings || {});
+
+    if (statusEl) statusEl.innerText = `Loaded group '${name}' with ${Array.isArray(group.targets) ? group.targets.length : 0} target(s).`;
+}
+
+async function openSettingsGroupsModal() {
+    settingsGroupsLastFocusedElement = document.activeElement;
+    const modal = document.getElementById('settings-groups-modal');
+    const closeBtn = modal ? modal.querySelector('button[aria-label="Close settings groups"]') : null;
+    const statusEl = document.getElementById('settings-groups-status');
+    const nameEl = document.getElementById('sg-group-name');
+
+    if (!modal) return;
+    modal.classList.remove('hidden');
+    document.body.classList.add('overflow-hidden');
+    if (closeBtn) closeBtn.focus();
+
+    if (statusEl) statusEl.innerText = '';
+    if (nameEl) nameEl.value = '';
+    renderSettingsGroupsFieldEditor({});
+
+    renderSettingsGroupsTargetHosts();
+    renderSettingsGroupsScopeFields();
+    await refreshSettingsGroupsOptionSuggestions({});
+    await loadSettingsGroupsModalGroups();
+}
+
+function closeSettingsGroupsModal() {
+    const modal = document.getElementById('settings-groups-modal');
+    if (modal) modal.classList.add('hidden');
+    document.body.classList.remove('overflow-hidden');
+    if (settingsGroupsLastFocusedElement && typeof settingsGroupsLastFocusedElement.focus === 'function') {
+        settingsGroupsLastFocusedElement.focus();
+    }
+    settingsGroupsLastFocusedElement = null;
+}
+
+function handleSettingsGroupsBackdropClick(event) {
+    const modal = document.getElementById('settings-groups-modal');
+    if (!modal) return;
+    if (event.target === modal) closeSettingsGroupsModal();
+}
+
+async function saveSettingsGroupsGroup() {
+    const statusEl = document.getElementById('settings-groups-status');
+    const name = String(document.getElementById('sg-group-name')?.value || '').trim();
+    const targets = selectedSettingsGroupsTargets();
+    const scopeKeys = selectedSettingsGroupsScopeKeys();
+
+    if (!name) {
+        if (statusEl) statusEl.innerText = 'Enter a group name first.';
+        return;
+    }
+    if (targets.length === 0) {
+        if (statusEl) statusEl.innerText = 'Select at least one target deck.';
+        return;
+    }
+    if (scopeKeys.length === 0) {
+        if (statusEl) statusEl.innerText = 'Select at least one field in Field Scope.';
+        return;
+    }
+
+    const settingsDraft = collectSettingsGroupsFieldSettings();
+    const scopedSettings = filterSettingsGroupsDraftByScope(settingsDraft);
+    if (Object.keys(scopedSettings).length === 0) {
+        if (statusEl) statusEl.innerText = 'No settings remain after Field Scope filtering.';
+        return;
+    }
+
+    try {
+        const res = await fetch('/api/control/settings-groups', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, targets, settings: scopedSettings, field_keys: scopeKeys }),
+        });
+        let data;
+        try { data = await res.json(); } catch (_) { data = {}; }
+        if (!res.ok) {
+            if (statusEl) statusEl.innerText = `Save failed: ${data.detail || 'Unknown error'}`;
+            return;
+        }
+        await loadSettingsGroupsModalGroups();
+        const select = document.getElementById('sg-group-select');
+        if (select) select.value = name;
+        onSettingsGroupsGroupSelected();
+        if (statusEl) statusEl.innerText = `Saved group '${name}'.`;
+    } catch (_) {
+        if (statusEl) statusEl.innerText = 'Save failed: Could not reach backend API.';
+    }
+}
+
+async function applySettingsGroupsGroup() {
+    const statusEl = document.getElementById('settings-groups-status');
+    const name = String(document.getElementById('sg-group-select')?.value || '').trim();
+    if (!name) {
+        if (statusEl) statusEl.innerText = 'Select a group to apply.';
+        return;
+    }
+    try {
+        const res = await fetch(`/api/control/settings-groups/${encodeURIComponent(name)}/apply`, { method: 'POST' });
+        let data;
+        try { data = await res.json(); } catch (_) { data = {}; }
+        if (!res.ok) {
+            if (statusEl) statusEl.innerText = `Apply failed: ${data.detail || 'Unknown error'}`;
+            return;
+        }
+        const results = Array.isArray(data.results) ? data.results : [];
+        const successCount = results.filter((r) => r && r.success).length;
+        if (statusEl) statusEl.innerText = `Applied '${name}' to ${successCount}/${results.length} deck(s).`;
+    } catch (_) {
+        if (statusEl) statusEl.innerText = 'Apply failed: Could not reach backend API.';
+    }
+}
+
+async function deleteSettingsGroupsGroup() {
+    const statusEl = document.getElementById('settings-groups-status');
+    const select = document.getElementById('sg-group-select');
+    const name = String(select?.value || '').trim();
+    if (!name) {
+        if (statusEl) statusEl.innerText = 'Select a group to delete.';
+        return;
+    }
+    if (!window.confirm(`Delete settings group '${name}'?`)) return;
+
+    try {
+        const res = await fetch(`/api/control/settings-groups/${encodeURIComponent(name)}`, { method: 'DELETE' });
+        let data;
+        try { data = await res.json(); } catch (_) { data = {}; }
+        if (!res.ok) {
+            if (statusEl) statusEl.innerText = `Delete failed: ${data.detail || 'Unknown error'}`;
+            return;
+        }
+        await loadSettingsGroupsModalGroups();
+        renderSettingsGroupsTargetHosts();
+        renderSettingsGroupsScopeFields();
+        const nameEl = document.getElementById('sg-group-name');
+        if (nameEl) nameEl.value = '';
+        renderSettingsGroupsFieldEditor({});
+        if (statusEl) statusEl.innerText = `Deleted group '${name}'.`;
+    } catch (_) {
+        if (statusEl) statusEl.innerText = 'Delete failed: Could not reach backend API.';
+    }
+}
+
+async function applySettingsGroupsDraftToSelected() {
+    const statusEl = document.getElementById('settings-groups-status');
+    const targets = selectedSettingsGroupsTargets();
+    if (targets.length === 0) {
+        if (statusEl) statusEl.innerText = 'Select at least one target deck.';
+        return;
+    }
+
+    const settingsDraft = collectSettingsGroupsFieldSettings();
+    const scopedSettings = filterSettingsGroupsDraftByScope(settingsDraft);
+    if (Object.keys(scopedSettings).length === 0) {
+        if (statusEl) statusEl.innerText = 'No settings remain after Field Scope filtering.';
+        return;
+    }
+
+    try {
+        const res = await fetch('/api/control/apply-settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ targets, settings: scopedSettings }),
+        });
+        let data;
+        try { data = await res.json(); } catch (_) { data = {}; }
+        if (!res.ok) {
+            if (statusEl) statusEl.innerText = `Apply failed: ${data.detail || 'Unknown error'}`;
+            return;
+        }
+        const successCount = Number(data.success_count || 0);
+        if (statusEl) statusEl.innerText = `Applied draft settings to ${successCount}/${targets.length} deck(s).`;
+    } catch (_) {
+        if (statusEl) statusEl.innerText = 'Apply failed: Could not reach backend API.';
+    }
 }
 
 function setDeckSettingsInputValue(inputId, value) {
@@ -2159,6 +2962,11 @@ async function openDeckSettings(host, name) {
         'ds-audio-input',
         'ds-audio-codec',
         'ds-default-standard',
+        'ds-audio-input-channels',
+        'ds-timecode-input',
+        'ds-timecode-output',
+        'ds-timecode-preset',
+        'ds-audio-meters',
         'ds-slate-reel',
         'ds-scene-id',
         'ds-shot-type',
@@ -2195,13 +3003,15 @@ async function openDeckSettings(host, name) {
         if (sourceEl) {
             const optionsSource = data.options_source === 'device'
                 ? 'device-reported'
+                : (data.options_source === 'model_profile_preferred'
+                    ? 'model capability profile (preferred)'
                 : (data.options_source === 'device+model'
                     ? 'device + model profile fallback'
                     : (data.options_source === 'device_partial'
                         ? 'device-reported (partial enumeration)'
                         : (data.options_source === 'model_profile'
                             ? 'model profile fallback'
-                            : 'current-values-only (no option list returned by device)')));
+                            : 'current-values-only (no option list returned by device)'))));
             sourceEl.innerText = `Options source: ${optionsSource} · Current values: device-reported`;
         }
         _renderCurrentSettingsPanel(settings);
@@ -2213,6 +3023,10 @@ async function openDeckSettings(host, name) {
             'audio input': 'ds-audio-input',
             'audio codec': 'ds-audio-codec',
             'default standard': 'ds-default-standard',
+            'audio input channels': 'ds-audio-input-channels',
+            'timecode input': 'ds-timecode-input',
+            'timecode output': 'ds-timecode-output',
+            'audio meters': 'ds-audio-meters',
         };
         Object.entries(fieldMap).forEach(([settingKey, elId]) => {
             const val = settings[settingKey];
@@ -2237,10 +3051,15 @@ async function openDeckSettings(host, name) {
             'camera': 'ds-camera',
             'director': 'ds-director',
             'camera operator': 'ds-camera-operator',
+            'timecode preset': 'ds-timecode-preset',
         };
         Object.entries(extraFieldMap).forEach(([settingKey, inputId]) => {
             setDeckSettingsInputValue(inputId, settings[settingKey] || '');
         });
+
+        renderDeckSettingsTargetHosts();
+        renderDeckSettingsScopeToggles();
+        await loadDeckSettingsGroups();
 
         formEl.classList.remove('hidden');
         saveBtn.classList.remove('hidden');
@@ -2325,6 +3144,8 @@ function handleDeckSettingsEscape(event) {
     }
     if (isDeckSettingsOpen()) closeDeckSettings();
     if (isDeckRecordingsOpen()) closeDeckRecordings();
+    const settingsGroupsModal = document.getElementById('settings-groups-modal');
+    if (settingsGroupsModal && !settingsGroupsModal.classList.contains('hidden')) closeSettingsGroupsModal();
 }
 
 function getDeckSettingsFocusableElements() {
@@ -2380,33 +3201,7 @@ async function saveDeckSettings() {
     const statusEl = document.getElementById('deck-settings-status');
     const saveBtn = document.getElementById('btn-save-deck-settings');
 
-    const settings = {};
-    const fieldMap = {
-        'ds-file-format': 'file format',
-        'ds-video-input': 'video input',
-        'ds-audio-input': 'audio input',
-        'ds-audio-codec': 'audio codec',
-        'ds-default-standard': 'default standard',
-        'ds-slate-reel': 'reel',
-        'ds-scene-id': 'scene id',
-        'ds-shot-type': 'shot type',
-        'ds-take': 'take',
-        'ds-take-scenario': 'take scenario',
-        'ds-take-auto-inc': 'take auto inc',
-        'ds-good-take': 'good take',
-        'ds-environment': 'environment',
-        'ds-day-night': 'day night',
-        'ds-project-name': 'project name',
-        'ds-camera': 'camera',
-        'ds-director': 'director',
-        'ds-camera-operator': 'camera operator',
-    };
-    Object.entries(fieldMap).forEach(([elId, key]) => {
-        const el = document.getElementById(elId);
-        if (!el) return;
-        const value = String(el.value || '').trim();
-        if (value) settings[key] = value;
-    });
+    const settings = collectDeckSettingsValues();
 
     if (Object.keys(settings).length === 0) {
         if (statusEl) statusEl.innerText = 'No changes selected.';
@@ -2465,8 +3260,11 @@ function _renderCurrentSettingsPanel(settings) {
         'audio input': 'Audio Input',
         'audio codec': 'Audio Codec',
         'default standard': 'Default Standard',
+        'audio input channels': 'Audio Input Channels',
         'timecode input': 'Timecode Input',
         'timecode output': 'Timecode Output',
+        'timecode preset': 'Timecode Preset',
+        'audio meters': 'Audio Meters',
         'reel': 'Reel',
         'scene id': 'Scene ID',
         'shot type': 'Shot Type',
@@ -2520,6 +3318,9 @@ Object.assign(window, {
     uploadScheduleFile,
     openNativePicker,
     openSiblingPicker,
+    toggleSlateFields,
+    toggleEventSlateFields,
+    toggleDeckSlateSection,
     insertEventSlateTemplate,
     formatDeckCard,
     closeDeckFormatConfirmDialog,
@@ -2528,6 +3329,18 @@ Object.assign(window, {
     openDeckRecordings,
     closeDeckRecordings,
     handleDeckRecordingsBackdropClick,
+    openSettingsGroupsModal,
+    closeSettingsGroupsModal,
+    handleSettingsGroupsBackdropClick,
+    onSettingsGroupsGroupSelected,
+    onSettingsGroupsTargetSelectionChanged,
+    setSettingsGroupsTargetsAll,
+    setSettingsGroupsScopeAll,
+    applySettingsGroupsScopePreset,
+    saveSettingsGroupsGroup,
+    applySettingsGroupsGroup,
+    deleteSettingsGroupsGroup,
+    applySettingsGroupsDraftToSelected,
     loadDeckRecordingsList,
     transferDeckRecording,
     onDeckClipSelectionChanged,
@@ -2545,6 +3358,12 @@ Object.assign(window, {
     closeDeckSettings,
     handleDeckSettingsBackdropClick,
     saveDeckSettings,
+    setDeckSettingsScopeAll,
+    onDeckSettingsGroupSelected,
+    applyDeckSettingsToSelectedTargets,
+    saveDeckSettingsGroup,
+    applyDeckSettingsGroup,
+    deleteDeckSettingsGroup,
     loadDeckSettingsDebug,
 });
 

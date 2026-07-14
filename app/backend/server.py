@@ -58,6 +58,7 @@ DEFAULT_CONFIG = {
         "per_deck": {},
         "per_event": {},
     },
+    "settings_groups": {},
 }
 
 SLATE_SETTING_KEYS: tuple[str, ...] = (
@@ -82,6 +83,11 @@ DECK_SETTING_KEYS: tuple[str, ...] = (
     "audio input",
     "audio codec",
     "default standard",
+    "audio input channels",
+    "timecode input",
+    "timecode output",
+    "timecode preset",
+    "audio meters",
 )
 
 
@@ -125,8 +131,6 @@ def load_model_capability_profiles() -> dict[str, dict[str, list[str]]]:
 
     return profiles
 
-
-MODEL_CAPABILITY_PROFILES: dict[str, dict[str, list[str]]] = load_model_capability_profiles()
 
 _playback_schedule_tasks: dict[str, asyncio.Task] = {}
 _playback_schedule_status: dict[str, dict[str, Any]] = {}
@@ -245,7 +249,7 @@ def _collect_options_from_text(raw_text: str, options: dict[str, list[str]], key
 
     lines = [line.strip() for line in raw_text.replace("\r\n", "\n").split("\n") if line.strip()]
     aliases = {
-        "file format": ["file format", "record format", "codec", "format"],
+        "file format": ["file format", "record format", "codec"],
         "video input": ["video input"],
         "audio input": ["audio input"],
         "audio codec": ["audio codec"],
@@ -277,7 +281,7 @@ def _collect_options_from_text(raw_text: str, options: dict[str, list[str]], key
 
 
 async def discover_deck_setting_options(host: str, settings: dict[str, str]) -> tuple[dict[str, list[str]], str]:
-    from app.backend.hyperdeck_control import send_hyperdeck_command, parse_hyperdeck_response, send_hyperdeck_prepare_confirm
+    from app.backend.hyperdeck_control import send_hyperdeck_command, parse_hyperdeck_response
 
     # Strict device-driven mode: no default fallback lists.
     options: dict[str, list[str]] = {k: [] for k in DECK_SETTING_KEYS}
@@ -345,23 +349,31 @@ async def discover_deck_setting_options(host: str, settings: dict[str, str]) -> 
         if key in discovered and discovered[key]:
             options[key] = discovered[key]
 
-    # If device cannot enumerate option lists, use model profile as fallback.
+    # Prefer model profile lists for known models so UI remains stable and complete.
     used_model_profile = False
-    model_profile = MODEL_CAPABILITY_PROFILES.get(model_name, {}) if model_name else {}
+    model_profiles = load_model_capability_profiles()
+    model_profile = model_profiles.get(model_name, {}) if model_name else {}
     if model_profile:
         for key in options.keys():
-            if options[key]:
-                continue
-            for candidate in model_profile.get(key, []):
-                _append_unique_case_insensitive(options[key], candidate)
-            if options[key]:
+            profile_values = model_profile.get(key, [])
+            if profile_values:
+                options[key] = []
+                for candidate in profile_values:
+                    _append_unique_case_insensitive(options[key], candidate)
                 used_model_profile = True
+                continue
+
+            # If the profile has no list for this key, keep device-discovered values.
+            if key in discovered and discovered[key]:
+                options[key] = discovered[key]
 
     if discovered:
-        if len(discovered) == len(options):
+        if used_model_profile:
+            source = "model_profile_preferred"
+        elif len(discovered) == len(options):
             source = "device"
         else:
-            source = "device+model" if used_model_profile else "device_partial"
+            source = "device_partial"
     elif used_model_profile:
         source = "model_profile"
 
@@ -633,6 +645,34 @@ def normalize_config_payload(config: dict[str, Any]) -> dict[str, Any]:
         "per_deck": slate_per_deck if isinstance(slate_per_deck, dict) else {},
         "per_event": slate_per_event if isinstance(slate_per_event, dict) else {},
     }
+
+    raw_groups = merged.get("settings_groups")
+    normalized_groups: dict[str, dict[str, Any]] = {}
+    if isinstance(raw_groups, dict):
+        for raw_name, raw_payload in raw_groups.items():
+            name = str(raw_name or "").strip()
+            if not name or not isinstance(raw_payload, dict):
+                continue
+            targets_raw = raw_payload.get("targets")
+            targets = [str(t).strip() for t in (targets_raw or []) if str(t).strip()] if isinstance(targets_raw, list) else []
+            settings_raw = raw_payload.get("settings")
+            settings = settings_raw if isinstance(settings_raw, dict) else {}
+            field_keys_raw = raw_payload.get("field_keys")
+            field_keys: list[str] = []
+            if isinstance(field_keys_raw, list):
+                seen: set[str] = set()
+                for item in field_keys_raw:
+                    key = str(item or "").strip().lower()
+                    if not key or key in seen:
+                        continue
+                    seen.add(key)
+                    field_keys.append(key)
+            normalized_groups[name] = {
+                "targets": targets,
+                "settings": settings,
+                "field_keys": field_keys,
+            }
+    merged["settings_groups"] = normalized_groups
     return merged
 
 
@@ -1121,6 +1161,28 @@ async def _send_command_to_deck(deck_id: str, host: str, command: str) -> dict:
             "response": "Unexpected communication error.",
             "status_code": 503,
         }
+
+
+async def _apply_settings_to_host(host: str, settings: dict[str, Any]) -> dict[str, Any]:
+    from app.backend.hyperdeck_control import (
+        send_hyperdeck_command,
+        parse_hyperdeck_response,
+        build_configuration_command,
+    )
+
+    commands = build_configuration_command(settings)
+    if not commands:
+        return {"host": host, "status": "noop", "results": [], "success": False}
+
+    results: list[dict[str, Any]] = []
+    for cmd in commands:
+        response = await send_hyperdeck_command(host, cmd)
+        parsed = parse_hyperdeck_response(response)
+        success = is_hyperdeck_success_code(parsed.get("_code"))
+        results.append({"command": cmd, "success": success, "response": response})
+
+    overall = all(r.get("success") for r in results)
+    return {"host": host, "status": "ok" if overall else "partial", "results": results, "success": overall}
 
 
 async def _run_scheduled_playback(host: str, play_at_iso: str, cue_clip_id: str = "") -> None:
@@ -1685,6 +1747,142 @@ async def set_deck_configuration(host: str, settings: dict):
 
     overall = all(r["success"] for r in results)
     return {"host": host, "status": "ok" if overall else "partial", "results": results}
+
+
+@app.post("/api/control/apply-settings")
+async def apply_settings_to_multiple_decks(payload: dict[str, Any]):
+    """Apply a settings payload to multiple configured deck hosts."""
+    targets_raw = payload.get("targets")
+    settings = payload.get("settings")
+
+    if not isinstance(targets_raw, list) or not targets_raw:
+        raise HTTPException(status_code=400, detail="targets must be a non-empty array of configured hosts.")
+    if not isinstance(settings, dict) or not settings:
+        raise HTTPException(status_code=400, detail="settings must be a non-empty object.")
+
+    configured = await _load_all_deck_hosts()
+    configured_hosts = {str(h).strip() for h in configured.values()}
+    targets = [str(t).strip() for t in targets_raw if str(t).strip()]
+    invalid = [t for t in targets if t not in configured_hosts]
+    if invalid:
+        raise HTTPException(status_code=404, detail=f"Unknown or unconfigured hosts: {', '.join(invalid)}")
+
+    results = await asyncio.gather(*[_apply_settings_to_host(host, settings) for host in targets], return_exceptions=True)
+    normalized_results: list[dict[str, Any]] = []
+    for host, result in zip(targets, results):
+        if isinstance(result, Exception):
+            normalized_results.append({"host": host, "status": "error", "success": False, "results": [], "error": str(result)})
+        elif isinstance(result, dict):
+            normalized_results.append(result)
+        else:
+            normalized_results.append({"host": host, "status": "error", "success": False, "results": [], "error": "Unexpected apply-settings result type."})
+
+    return {
+        "status": "ok",
+        "targets": targets,
+        "success_count": sum(1 for r in normalized_results if r.get("success")),
+        "results": normalized_results,
+    }
+
+
+@app.get("/api/control/settings-groups")
+async def get_settings_groups():
+    config = await get_config()
+    groups = (config.get("settings_groups") or {}) if isinstance(config, dict) else {}
+    return {"groups": groups}
+
+
+@app.post("/api/control/settings-groups")
+async def save_settings_group(payload: dict[str, Any]):
+    name = str(payload.get("name") or "").strip()
+    targets_raw = payload.get("targets")
+    settings = payload.get("settings")
+    field_keys_raw = payload.get("field_keys")
+
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required.")
+    if not isinstance(targets_raw, list) or not targets_raw:
+        raise HTTPException(status_code=400, detail="targets must be a non-empty array.")
+    if not isinstance(settings, dict) or not settings:
+        raise HTTPException(status_code=400, detail="settings must be a non-empty object.")
+
+    targets = [str(t).strip() for t in targets_raw if str(t).strip()]
+    if not targets:
+        raise HTTPException(status_code=400, detail="targets must contain at least one host.")
+
+    field_keys: list[str] = []
+    if isinstance(field_keys_raw, list):
+        seen: set[str] = set()
+        for item in field_keys_raw:
+            key = str(item or "").strip().lower()
+            if not key or key in seen:
+                continue
+            if key not in settings:
+                continue
+            seen.add(key)
+            field_keys.append(key)
+    else:
+        field_keys = sorted(str(k).strip().lower() for k in settings.keys() if str(k).strip())
+
+    if not field_keys:
+        raise HTTPException(status_code=400, detail="field_keys must contain at least one selected setting key.")
+
+    config = await get_config()
+    groups = dict((config.get("settings_groups") or {}))
+    groups[name] = {"targets": targets, "settings": settings, "field_keys": field_keys}
+
+    config["settings_groups"] = groups
+    with open(CONFIG_FILE, 'w') as f:
+        json.dump(normalize_config_payload(config), f, indent=4)
+
+    return {"status": "ok", "name": name, "group": groups[name]}
+
+
+@app.delete("/api/control/settings-groups/{group_name}")
+async def delete_settings_group(group_name: str):
+    name = str(group_name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="group_name is required.")
+
+    config = await get_config()
+    groups = dict((config.get("settings_groups") or {}))
+    if name not in groups:
+        raise HTTPException(status_code=404, detail="Settings group not found.")
+
+    groups.pop(name, None)
+    config["settings_groups"] = groups
+    with open(CONFIG_FILE, 'w') as f:
+        json.dump(normalize_config_payload(config), f, indent=4)
+
+    return {"status": "ok", "deleted": name}
+
+
+@app.post("/api/control/settings-groups/{group_name}/apply")
+async def apply_settings_group(group_name: str):
+    name = str(group_name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="group_name is required.")
+
+    config = await get_config()
+    groups = (config.get("settings_groups") or {}) if isinstance(config, dict) else {}
+    group = groups.get(name)
+    if not isinstance(group, dict):
+        raise HTTPException(status_code=404, detail="Settings group not found.")
+
+    settings = group.get("settings") or {}
+    field_keys = group.get("field_keys") or []
+    if isinstance(field_keys, list) and field_keys:
+        scoped_settings = {str(k): v for k, v in settings.items() if str(k).strip().lower() in {str(x).strip().lower() for x in field_keys}}
+    else:
+        scoped_settings = settings
+
+    payload = {
+        "targets": group.get("targets") or [],
+        "settings": scoped_settings,
+    }
+    result = await apply_settings_to_multiple_decks(payload)
+    result["group_name"] = name
+    return result
 
 
 @app.get("/api/browse")
