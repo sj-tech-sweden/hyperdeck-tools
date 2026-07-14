@@ -4,6 +4,7 @@ import ftplib
 import json
 import os
 import shutil
+import time
 from typing import Any
 
 from app.backend.hyperdeck_control import parse_hyperdeck_response, send_hyperdeck_command
@@ -111,9 +112,47 @@ def generate_target_filename(
         "weekday_sv3": get_weekday_sv3(now),
     }
     try:
-        return template.format(**tokens)
+        rendered = template.format(**tokens)
+        # Guard against templates like "... .{ext}" when ext already contains a leading dot.
+        while ".." in rendered:
+            rendered = rendered.replace("..", ".")
+        return rendered
     except Exception:
         return f"{now.strftime('%Y%m%d_%H%M')}_{safe_deck_name}{ext or '.mov'}"
+
+
+def _dedupe_filename_for_destinations(destinations: list[str], requested_filename: str) -> str:
+    """Return a collision-safe filename by appending _2, _3, ... before extension."""
+    clean = os.path.basename(str(requested_filename or "").strip())
+    if not clean:
+        clean = "capture.mov"
+
+    stem, suffix = os.path.splitext(clean)
+    if not stem:
+        stem = "capture"
+
+    def _exists_anywhere(candidate: str) -> bool:
+        for dest in destinations:
+            try:
+                if os.path.exists(os.path.join(dest, candidate)):
+                    return True
+            except Exception:
+                continue
+        return False
+
+    if not _exists_anywhere(clean):
+        return clean
+
+    counter = 2
+    while counter <= 9999:
+        candidate = f"{stem}_{counter}{suffix}"
+        if not _exists_anywhere(candidate):
+            return candidate
+        counter += 1
+
+    # Final fallback for pathological cases.
+    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    return f"{stem}_{ts}{suffix}"
 
 
 def _get_latest_file_from_ftp_sync(host: str, slot_id: str) -> str | None:
@@ -158,32 +197,42 @@ def _download_and_distribute_sync(
         except Exception:
             remote_size = None
 
+        downloaded = 0
+        started = time.monotonic()
+
+        def _emit_progress(progress_pct: int) -> None:
+            if not progress_callback:
+                return
+            elapsed = max(0.0, time.monotonic() - started)
+            try:
+                progress_callback(progress_pct, downloaded, remote_size or 0, elapsed)
+            except TypeError:
+                progress_callback(progress_pct)
+
         if os.path.exists(primary_path):
             try:
                 local_size = os.path.getsize(primary_path)
                 if remote_size is not None and local_size == remote_size:
-                    if progress_callback:
-                        progress_callback(100)
+                    _emit_progress(100)
                     ftp.quit()
                     return True
             except Exception:
                 pass
 
-        downloaded = 0
-
         def _write_chunk(chunk: bytes) -> None:
             nonlocal downloaded
             f.write(chunk)
             downloaded += len(chunk)
-            if progress_callback and remote_size:
+            if remote_size:
                 pct = int((downloaded / max(remote_size, 1)) * 100)
-                progress_callback(max(0, min(100, pct)))
+                _emit_progress(max(0, min(100, pct)))
 
         with open(primary_path, "wb") as f:
-            if progress_callback:
-                progress_callback(0)
+            _emit_progress(0)
             ftp.retrbinary(f"RETR {remote_filename}", _write_chunk)
         ftp.quit()
+
+        _emit_progress(100)
 
         for dest in destinations[1:]:
             secondary_path = os.path.join(dest, local_filename)
@@ -273,6 +322,43 @@ async def transfer_recording_from_deck(
     )
 
 
+def _upload_playback_file_to_deck_sync(host: str, slot_id: str, filename: str, file_bytes: bytes) -> dict[str, Any]:
+    target_slot = str(slot_id or "1").strip() or "1"
+    clean_name = os.path.basename(str(filename or "").strip())
+    if not clean_name:
+        raise ValueError("filename is required")
+
+    ftp = ftplib.FTP(host, timeout=30)
+    try:
+        ftp.login()
+        try:
+            ftp.cwd(target_slot)
+        except Exception:
+            ftp.cwd(f"/{target_slot}")
+
+        from io import BytesIO
+
+        source = BytesIO(file_bytes)
+        ftp.storbinary(f"STOR {clean_name}", source)
+
+        size = len(file_bytes)
+        try:
+            size = int(ftp.size(clean_name) or size)
+        except Exception:
+            pass
+
+        return {"filename": clean_name, "size": size, "slot_id": target_slot}
+    finally:
+        try:
+            ftp.quit()
+        except Exception:
+            pass
+
+
+async def upload_playback_file_to_deck(host: str, slot_id: str, filename: str, file_bytes: bytes) -> dict[str, Any]:
+    return await asyncio.to_thread(_upload_playback_file_to_deck_sync, host, slot_id, filename, file_bytes)
+
+
 async def _trigger_transfer_for_stop(
     deck_name: str,
     host: str,
@@ -310,6 +396,7 @@ async def _trigger_transfer_for_stop(
         slot_id=slot_id,
         started_at=started_at,
     )
+    local_filename = _dedupe_filename_for_destinations(destinations, local_filename)
 
     runtime["is_transferring"] = True
     runtime["transfer_progress"] = 0
@@ -326,13 +413,22 @@ async def _trigger_transfer_for_stop(
         "is_transferring": True,
     }
 
-    def _progress_callback(pct: int) -> None:
+    def _progress_callback(pct: int, downloaded: int = 0, total: int = 0, elapsed: float = 0.0) -> None:
         runtime["transfer_progress"] = pct
+        eta_seconds = None
+        if total > 0 and downloaded > 0 and elapsed > 0:
+            remaining = max(total - downloaded, 0)
+            rate = downloaded / elapsed
+            if rate > 0:
+                eta_seconds = int(remaining / rate)
+        runtime["transfer_eta_seconds"] = eta_seconds
+
         state = dict(global_deck_state_cache.get(host, {}))
         state["progress"] = pct
         state["file"] = local_filename
         state["status"] = f"Transferring ({pct}%)"
         state["is_transferring"] = True
+        state["transfer_eta_seconds"] = eta_seconds
         global_deck_state_cache[host] = state
 
     success = await asyncio.to_thread(
@@ -352,13 +448,17 @@ async def _trigger_transfer_for_stop(
         current["file"] = local_filename
         current["progress"] = 100
         current["is_transferring"] = False
+        current["transfer_eta_seconds"] = 0
         runtime["transfer_progress"] = 100
         runtime["transfer_file"] = local_filename
+        runtime["transfer_eta_seconds"] = 0
         global_deck_state_cache[host] = current
     else:
         current = dict(global_deck_state_cache.get(host, {}))
         current["status"] = "Transfer Failed"
         current["is_transferring"] = False
+        current["transfer_eta_seconds"] = None
+        runtime["transfer_eta_seconds"] = None
         global_deck_state_cache[host] = current
 
 
@@ -369,6 +469,7 @@ async def _poll_single_deck(deck_name: str, host: str, config: dict[str, Any]) -
         "is_transferring": False,
         "transfer_progress": 0,
         "transfer_file": "",
+        "transfer_eta_seconds": None,
         "poll_failures": 0,
         "last_transport_status": "Configured",
         "last_slot_id": "1",
@@ -420,6 +521,7 @@ async def _poll_single_deck(deck_name: str, host: str, config: dict[str, Any]) -
     is_transferring = bool(runtime.get("is_transferring"))
     transfer_progress = int(runtime.get("transfer_progress", 0) or 0)
     transfer_file = str(runtime.get("transfer_file", "") or "")
+    transfer_eta_seconds = runtime.get("transfer_eta_seconds")
     if is_transferring:
         status_display = f"Transferring ({max(0, min(100, transfer_progress))}%)"
 
@@ -431,6 +533,7 @@ async def _poll_single_deck(deck_name: str, host: str, config: dict[str, Any]) -
         "is_transferring": is_transferring,
         "progress": max(0, min(100, transfer_progress)) if is_transferring else int(existing.get("progress", 0) or 0),
         "file": transfer_file if is_transferring else existing.get("file", ""),
+        "transfer_eta_seconds": transfer_eta_seconds if is_transferring else existing.get("transfer_eta_seconds"),
     }
 
 

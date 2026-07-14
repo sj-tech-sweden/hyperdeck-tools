@@ -128,6 +128,9 @@ def load_model_capability_profiles() -> dict[str, dict[str, list[str]]]:
 
 MODEL_CAPABILITY_PROFILES: dict[str, dict[str, list[str]]] = load_model_capability_profiles()
 
+_playback_schedule_tasks: dict[str, asyncio.Task] = {}
+_playback_schedule_status: dict[str, dict[str, Any]] = {}
+
 # Ensure the plugins directory exists out of the gate
 os.makedirs(PLUGINS_DIR, exist_ok=True)
 os.makedirs(UPLOADS_DIR, exist_ok=True)
@@ -182,6 +185,57 @@ def _append_unique_case_insensitive(values: list[str], candidate: str) -> None:
     lower_set = {v.lower() for v in values}
     if clean.lower() not in lower_set:
         values.append(clean)
+
+
+def _parse_clips_get_response(raw_response: str) -> list[dict[str, str]]:
+    clips: list[dict[str, str]] = []
+    lines = [line.strip() for line in str(raw_response or "").replace("\r\n", "\n").split("\n") if line.strip()]
+
+    # Variant A: lines like "1: clip001.mp4 ..."
+    for line in lines:
+        match = re.match(r"^(\d+)\s*:\s*(.+)$", line)
+        if not match:
+            continue
+        clip_id = match.group(1).strip()
+        tail = match.group(2).strip()
+        name_match = re.search(r"([^\r\n]+\.(?:mov|mp4|mxf))", tail, flags=re.IGNORECASE)
+        if name_match:
+            name = name_match.group(1).strip()
+        else:
+            name = tail.split()[0] if tail else f"clip_{clip_id}"
+        clips.append({"id": clip_id, "name": name, "label": tail or name})
+
+    if clips:
+        return clips
+
+    # Variant B: key/value blocks with clip id and optional name.
+    pending_id = ""
+    pending_name = ""
+    for line in lines:
+        id_match = re.match(r"^clip\s+id\s*:\s*(\d+)\s*$", line, flags=re.IGNORECASE)
+        if id_match:
+            if pending_id:
+                clips.append({
+                    "id": pending_id,
+                    "name": pending_name or f"clip_{pending_id}",
+                    "label": pending_name or f"clip {pending_id}",
+                })
+            pending_id = id_match.group(1).strip()
+            pending_name = ""
+            continue
+
+        name_match = re.match(r"^name\s*:\s*(.+)$", line, flags=re.IGNORECASE)
+        if name_match and pending_id:
+            pending_name = name_match.group(1).strip()
+
+    if pending_id:
+        clips.append({
+            "id": pending_id,
+            "name": pending_name or f"clip_{pending_id}",
+            "label": pending_name or f"clip {pending_id}",
+        })
+
+    return clips
 
 
 def _collect_options_from_text(raw_text: str, options: dict[str, list[str]], key_hints: set[str] | None = None) -> None:
@@ -932,6 +986,12 @@ async def get_deck_states():
                 "matched_event": None,
                 "auto_selected": False,
             })
+            playback_schedule = _playback_schedule_status.get(str(host), {
+                "state": "idle",
+                "play_at": "",
+                "cue_clip_id": "",
+                "error": "",
+            })
             enriched[str(host)] = {
                 **state,
                 "stage": resolution.get("deck_stage", ""),
@@ -941,6 +1001,8 @@ async def get_deck_states():
                 "connected": bool(state.get("connected", False)),
                 "status": state.get("status", "Configured"),
                 "transport_status": state.get("transport_status", state.get("status", "Configured")),
+                "transfer_eta_seconds": state.get("transfer_eta_seconds"),
+                "playback_schedule": playback_schedule,
             }
         return enriched
 
@@ -969,6 +1031,13 @@ async def get_deck_states():
             "next_event": resolution.get("next_event"),
             "matched_event": resolution.get("matched_event"),
             "auto_selected": resolution.get("auto_selected", False),
+            "transfer_eta_seconds": None,
+            "playback_schedule": _playback_schedule_status.get(host_str, {
+                "state": "idle",
+                "play_at": "",
+                "cue_clip_id": "",
+                "error": "",
+            }),
         }
     return fallback_state
 
@@ -1054,6 +1123,45 @@ async def _send_command_to_deck(deck_id: str, host: str, command: str) -> dict:
         }
 
 
+async def _run_scheduled_playback(host: str, play_at_iso: str, cue_clip_id: str = "") -> None:
+    from app.backend.hyperdeck_control import send_hyperdeck_command, parse_hyperdeck_response
+
+    status = _playback_schedule_status.setdefault(host, {})
+    status.update({
+        "host": host,
+        "play_at": play_at_iso,
+        "cue_clip_id": cue_clip_id,
+        "state": "scheduled",
+        "last_response": "",
+        "error": "",
+    })
+
+    try:
+        run_at = datetime.fromisoformat(play_at_iso)
+    except ValueError:
+        status.update({"state": "failed", "error": "Invalid ISO datetime for play_at."})
+        return
+
+    delay = (run_at - datetime.now()).total_seconds()
+    if delay > 0:
+        await asyncio.sleep(delay)
+
+    if cue_clip_id:
+        cue_resp = await send_hyperdeck_command(host, f"goto: clip id: {cue_clip_id}")
+        cue_parsed = parse_hyperdeck_response(cue_resp)
+        if not is_hyperdeck_success_code(cue_parsed.get("_code")):
+            status.update({"state": "failed", "last_response": cue_resp, "error": "Cue command rejected by deck."})
+            return
+
+    play_resp = await send_hyperdeck_command(host, "play")
+    play_parsed = parse_hyperdeck_response(play_resp)
+    if not is_hyperdeck_success_code(play_parsed.get("_code")):
+        status.update({"state": "failed", "last_response": play_resp, "error": "Play command rejected by deck."})
+        return
+
+    status.update({"state": "completed", "last_response": play_resp, "error": ""})
+
+
 # NOTE: Routes with literal path segments ("all") must be registered BEFORE
 # parameterised routes ({host}) so FastAPI does not absorb "all" as a host value.
 
@@ -1119,6 +1227,42 @@ async def list_deck_recordings(host: str, slot_id: str = "1"):
     }
 
 
+@app.get("/api/control/{host}/clips")
+async def list_deck_clips(host: str, slot_id: str = "1"):
+    """List deck clip IDs for cue/play/schedule workflows."""
+    await _validate_deck_host(host)
+    from app.backend.hyperdeck_control import send_hyperdeck_command, parse_hyperdeck_response
+    from app.backend.core_daemon import list_recordings_from_deck
+
+    target_slot = str(slot_id or "1").strip() or "1"
+    clips: list[dict[str, str]] = []
+    source = "hyperdeck"
+
+    # Best effort: select slot first on models that support explicit slot select.
+    try:
+        await send_hyperdeck_command(host, f"slot select: slot id: {target_slot}")
+    except Exception:
+        pass
+
+    try:
+        response = await send_hyperdeck_command(host, "clips get")
+        parsed = parse_hyperdeck_response(response)
+        if is_hyperdeck_success_code(parsed.get("_code")):
+            clips = _parse_clips_get_response(response)
+    except Exception:
+        clips = []
+
+    if not clips:
+        source = "ftp_fallback"
+        recordings = await list_recordings_from_deck(host, target_slot)
+        clips = [
+            {"id": str(idx + 1), "name": str(item.get("name") or f"clip_{idx + 1}"), "label": str(item.get("name") or f"clip_{idx + 1}")}
+            for idx, item in enumerate(recordings)
+        ]
+
+    return {"host": host, "slot_id": target_slot, "source": source, "clips": clips}
+
+
 @app.get("/api/control/{host}/slots")
 async def list_deck_slots(host: str):
     """Return available slot IDs for a deck, if the device reports them."""
@@ -1137,7 +1281,8 @@ async def transfer_deck_recording(host: str, payload: dict[str, Any]):
 
     slot_id = str(payload.get("slot_id") or "1").strip() or "1"
     remote_filename = str(payload.get("remote_filename") or "").strip()
-    local_filename = str(payload.get("local_filename") or remote_filename).strip()
+    local_filename_raw = str(payload.get("local_filename") or "").strip()
+    local_filename = local_filename_raw or remote_filename
 
     if not remote_filename:
         raise HTTPException(status_code=400, detail="remote_filename is required.")
@@ -1156,7 +1301,10 @@ async def transfer_deck_recording(host: str, payload: dict[str, Any]):
     decks = await _load_all_deck_hosts()
     deck_name = next((name for name, value in decks.items() if value == host), host)
 
-    from app.backend.core_daemon import global_deck_state_cache, transfer_recording_from_deck
+    from app.backend.core_daemon import global_deck_state_cache, transfer_recording_from_deck, _dedupe_filename_for_destinations
+
+    if not local_filename_raw:
+        local_filename = _dedupe_filename_for_destinations(destinations, local_filename)
 
     def _progress_callback(pct: int) -> None:
         state = dict(global_deck_state_cache.get(host, {}))
@@ -1202,6 +1350,177 @@ async def transfer_deck_recording(host: str, payload: dict[str, Any]):
     state["is_transferring"] = False
     global_deck_state_cache[host] = state
     raise HTTPException(status_code=502, detail="Failed to transfer recording from deck FTP storage.")
+
+
+@app.post("/api/control/{host}/transfer-preview")
+async def preview_deck_recording_transfer(host: str, payload: dict[str, Any]):
+    """Preview the final local filename with dedupe logic before transfer starts."""
+    await _validate_deck_host(host)
+
+    remote_filename = str(payload.get("remote_filename") or "").strip()
+    local_filename_raw = str(payload.get("local_filename") or "").strip()
+    if not remote_filename:
+        raise HTTPException(status_code=400, detail="remote_filename is required.")
+    if any(part in remote_filename for part in ("/", "\\", "..")):
+        raise HTTPException(status_code=400, detail="remote_filename must be a plain filename.")
+
+    config = await get_config()
+    destinations = [str(p).strip() for p in (config.get("destinations") or []) if str(p).strip()]
+    if not destinations:
+        raise HTTPException(status_code=400, detail="No destination folders configured.")
+
+    from app.backend.core_daemon import _dedupe_filename_for_destinations
+
+    requested = local_filename_raw or remote_filename
+    resolved = _dedupe_filename_for_destinations(destinations, requested)
+
+    return {
+        "host": host,
+        "requested_local_filename": requested,
+        "resolved_local_filename": resolved,
+        "will_dedupe": requested != resolved,
+    }
+
+
+@app.post("/api/control/{host}/upload-playback")
+async def upload_deck_playback_file(host: str, slot_id: str = "1", file: UploadFile = File(...)):
+    """Upload a media file to the deck's FTP slot for playback use."""
+    await _validate_deck_host(host)
+
+    filename = os.path.basename(str(file.filename or "").strip())
+    if not filename:
+        raise HTTPException(status_code=400, detail="Uploaded file must have a filename.")
+    if any(part in filename for part in ("/", "\\", "..")):
+        raise HTTPException(status_code=400, detail="Invalid filename.")
+
+    payload = await file.read()
+    if not payload:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+
+    from app.backend.core_daemon import upload_playback_file_to_deck
+
+    try:
+        uploaded = await upload_playback_file_to_deck(host, slot_id, filename, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"FTP upload failed: {exc}") from exc
+
+    return {
+        "status": "ok",
+        "host": host,
+        "slot_id": str(slot_id),
+        "filename": uploaded.get("filename", filename),
+        "size": int(uploaded.get("size", len(payload)) or len(payload)),
+    }
+
+
+@app.post("/api/control/{host}/cue")
+async def cue_deck_playback(host: str, payload: dict[str, Any]):
+    """Cue a recording clip by clip-id (position in clip list) for playback."""
+    await _validate_deck_host(host)
+    clip_id = str(payload.get("clip_id") or "").strip()
+    if not clip_id or not clip_id.isdigit():
+        raise HTTPException(status_code=400, detail="clip_id must be a numeric string.")
+
+    from app.backend.hyperdeck_control import send_hyperdeck_command, parse_hyperdeck_response
+    response = await send_hyperdeck_command(host, f"goto: clip id: {clip_id}")
+    parsed = parse_hyperdeck_response(response)
+    if not is_hyperdeck_success_code(parsed.get("_code")):
+        raise HTTPException(status_code=502, detail=f"Deck rejected cue command: {response}")
+
+    return {"status": "ok", "host": host, "clip_id": clip_id, "response": response}
+
+
+@app.post("/api/control/{host}/play")
+async def play_deck_now(host: str, payload: dict[str, Any] | None = None):
+    """Start playback on a deck."""
+    await _validate_deck_host(host)
+    clip_id = str((payload or {}).get("clip_id") or "").strip()
+
+    if clip_id:
+        if not clip_id.isdigit():
+            raise HTTPException(status_code=400, detail="clip_id must be numeric when provided.")
+        from app.backend.hyperdeck_control import send_hyperdeck_command, parse_hyperdeck_response
+        cue_response = await send_hyperdeck_command(host, f"goto: clip id: {clip_id}")
+        cue_parsed = parse_hyperdeck_response(cue_response)
+        if not is_hyperdeck_success_code(cue_parsed.get("_code")):
+            raise HTTPException(status_code=502, detail=f"Deck rejected cue command: {cue_response}")
+
+    result = await _send_command_to_deck(host, host, "play")
+    if not result.get("success"):
+        status_code = result.get("status_code", 502)
+        detail = result.get("response") if status_code != 502 else f"Deck rejected play command: {result.get('response')}"
+        raise HTTPException(status_code=status_code, detail=detail)
+    return {"status": "ok", "host": host, "clip_id": clip_id, "response": result.get("response", "")}
+
+
+@app.post("/api/control/{host}/play-schedule")
+async def schedule_deck_playback(host: str, payload: dict[str, Any]):
+    """Schedule playback at a future ISO datetime, optionally with a cue clip-id."""
+    await _validate_deck_host(host)
+
+    play_at = str(payload.get("play_at") or "").strip()
+    cue_clip_id = str(payload.get("clip_id") or "").strip()
+    if not play_at:
+        raise HTTPException(status_code=400, detail="play_at ISO datetime is required.")
+    if cue_clip_id and (not cue_clip_id.isdigit()):
+        raise HTTPException(status_code=400, detail="clip_id must be numeric when provided.")
+
+    old_task = _playback_schedule_tasks.get(host)
+    if old_task and not old_task.done():
+        old_task.cancel()
+
+    task = asyncio.create_task(_run_scheduled_playback(host, play_at, cue_clip_id))
+    _playback_schedule_tasks[host] = task
+
+    _playback_schedule_status[host] = {
+        "host": host,
+        "play_at": play_at,
+        "cue_clip_id": cue_clip_id,
+        "state": "scheduled",
+        "last_response": "",
+        "error": "",
+    }
+
+    return {
+        "status": "ok",
+        "host": host,
+        "play_at": play_at,
+        "cue_clip_id": cue_clip_id,
+        "state": "scheduled",
+    }
+
+
+@app.delete("/api/control/{host}/play-schedule")
+async def cancel_deck_playback_schedule(host: str):
+    await _validate_deck_host(host)
+    task = _playback_schedule_tasks.get(host)
+    if task and not task.done():
+        task.cancel()
+    _playback_schedule_status[host] = {
+        "host": host,
+        "play_at": "",
+        "cue_clip_id": "",
+        "state": "cancelled",
+        "last_response": "",
+        "error": "",
+    }
+    return {"status": "ok", "host": host, "state": "cancelled"}
+
+
+@app.get("/api/control/{host}/play-schedule")
+async def get_deck_playback_schedule(host: str):
+    await _validate_deck_host(host)
+    status = _playback_schedule_status.get(host, {
+        "host": host,
+        "play_at": "",
+        "cue_clip_id": "",
+        "state": "idle",
+        "last_response": "",
+        "error": "",
+    })
+    return status
 
 
 @app.post("/api/control/{host}/format-card")

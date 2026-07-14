@@ -494,6 +494,10 @@ async function updateDashboardMetrics() {
             const jsNameAttr = escHtml(JSON.stringify(item.name || ''));
             const parsedProgress = parseInt(item.progress, 10);
             const progressPct = Number.isFinite(parsedProgress) ? Math.max(0, Math.min(100, parsedProgress)) : 0;
+            const transferEta = formatEtaSeconds(item.transfer_eta_seconds);
+            const playbackSchedule = item.playback_schedule || {};
+            const playbackScheduleState = String(playbackSchedule.state || 'idle');
+            const playbackScheduleAt = playbackSchedule.play_at ? new Date(playbackSchedule.play_at).toLocaleString() : '';
             
             html += `
             <div class="rounded-lg border border-slate-800 bg-slate-900 p-5 shadow-sm">
@@ -521,14 +525,21 @@ async function updateDashboardMetrics() {
                         <div class="w-full bg-slate-950 rounded-full h-1.5 overflow-hidden">
                             <div class="bg-indigo-500 h-1.5 rounded-full transition-all duration-300" style="width: ${progressPct}%"></div>
                         </div>
+                        ${transferEta ? `<div class="text-[10px] text-slate-500">ETA: ${escHtml(transferEta)}</div>` : ''}
                     </div>
                 ` : `<div class="text-xs text-slate-500 italic">No storage IO operations running</div>`}
+
+                ${(playbackScheduleState !== 'idle' && playbackScheduleState !== 'cancelled') ? `<div class="mt-2 text-[11px] text-slate-300">Playback Schedule: <span class="text-white">${escHtml(playbackScheduleState)}</span>${playbackScheduleAt ? ` at ${escHtml(playbackScheduleAt)}` : ''}</div>` : ''}
 
                 <!-- Per-deck transport controls -->
                 <div class="mt-4 flex items-center gap-2 border-t border-slate-800 pt-3">
                     <button onclick="sendDeckCommand(${jsIpAttr}, 'record')"
                         class="flex-1 rounded bg-red-600/90 hover:bg-red-500 px-2 py-1.5 text-xs font-semibold text-white transition cursor-pointer">
                         ⏺ Record
+                    </button>
+                    <button onclick="playDeckNowFromCard(${jsIpAttr})"
+                        class="flex-1 rounded bg-emerald-600/90 hover:bg-emerald-500 px-2 py-1.5 text-xs font-semibold text-white transition cursor-pointer">
+                        ▶ Play
                     </button>
                     <button onclick="sendDeckCommand(${jsIpAttr}, 'stop')"
                         class="flex-1 rounded bg-slate-700 hover:bg-slate-600 px-2 py-1.5 text-xs font-semibold text-white transition cursor-pointer">
@@ -1348,6 +1359,7 @@ let activeDeckRecordingsHost = '';
 let deckRecordingsLastFocusedElement = null;
 let pendingDeckFormatRequest = null;
 let deckFormatProgressInterval = null;
+let currentDeckClipMap = [];
 
 function setDeckFormatControlsDisabled(disabled) {
     const ids = ['ds-format-slot', 'ds-format-filesystem', 'ds-format-name', 'btn-deck-format-card'];
@@ -1607,6 +1619,15 @@ function formatDeckModified(value) {
     return `${raw.slice(0, 4)}-${raw.slice(4, 6)}-${raw.slice(6, 8)} ${raw.slice(8, 10)}:${raw.slice(10, 12)}:${raw.slice(12, 14)}`;
 }
 
+function formatEtaSeconds(value) {
+    const seconds = Number.parseInt(value, 10);
+    if (!Number.isFinite(seconds) || seconds < 0) return '';
+    if (seconds < 60) return `${seconds}s`;
+    const minutes = Math.floor(seconds / 60);
+    const rem = seconds % 60;
+    return `${minutes}m ${rem}s`;
+}
+
 async function loadDeckRecordingsList() {
     if (!activeDeckRecordingsHost) return;
     const listEl = document.getElementById('deck-recordings-list');
@@ -1660,11 +1681,21 @@ async function loadDeckRecordingsList() {
 
             const btnWrap = document.createElement('div');
             btnWrap.className = 'col-span-2 flex justify-end';
+
+            const clipId = findDeckClipIdByName(name);
+
+            const pickBtn = document.createElement('button');
+            pickBtn.type = 'button';
+            pickBtn.className = 'text-[10px] bg-slate-800 text-slate-300 border border-slate-700 rounded px-2 py-1 hover:bg-slate-700 hover:text-white transition cursor-pointer mr-1';
+            pickBtn.textContent = 'Use';
+            pickBtn.addEventListener('click', () => selectClipForPlayback(name, clipId));
+
             const btn = document.createElement('button');
             btn.type = 'button';
             btn.className = 'text-[10px] bg-indigo-600/20 text-indigo-300 border border-indigo-500/30 rounded px-2 py-1 hover:bg-indigo-600 hover:text-white transition cursor-pointer';
             btn.textContent = 'Transfer';
             btn.addEventListener('click', () => transferDeckRecording(name));
+            btnWrap.appendChild(pickBtn);
             btnWrap.appendChild(btn);
 
             row.appendChild(nameEl);
@@ -1689,12 +1720,27 @@ async function transferDeckRecording(remoteFilename) {
     const slotEl = document.getElementById('drm-slot');
     const slotId = (slotEl?.value || '1').trim() || '1';
 
-    if (statusEl) statusEl.innerText = `Transferring ${remoteFilename}...`;
+    let resolvedLocalFilename = remoteFilename;
+    try {
+        const previewRes = await fetch(`/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/transfer-preview`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ slot_id: slotId, remote_filename: remoteFilename }),
+        });
+        if (previewRes.ok) {
+            const previewData = await previewRes.json();
+            resolvedLocalFilename = String(previewData.resolved_local_filename || remoteFilename);
+        }
+    } catch (_) {
+        // Non-fatal: transfer endpoint will still resolve safely server-side.
+    }
+
+    if (statusEl) statusEl.innerText = `Transferring ${remoteFilename} as ${resolvedLocalFilename}...`;
     try {
         const res = await fetch(`/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/transfer-recording`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ slot_id: slotId, remote_filename: remoteFilename }),
+            body: JSON.stringify({ slot_id: slotId, remote_filename: remoteFilename, local_filename: resolvedLocalFilename }),
         });
         let data;
         try { data = await res.json(); } catch (_) { data = {}; }
@@ -1708,6 +1754,279 @@ async function transferDeckRecording(remoteFilename) {
         updateDashboardMetrics();
     } catch (_) {
         if (statusEl) statusEl.innerText = 'Transfer failed: Could not reach backend API.';
+    }
+}
+
+function findDeckClipIdByName(filename) {
+    const target = String(filename || '').trim().toLowerCase();
+    if (!target) return '';
+    const match = currentDeckClipMap.find((clip) => String(clip.name || '').trim().toLowerCase() === target);
+    return match ? String(match.id || '') : '';
+}
+
+function onDeckClipSelectionChanged() {
+    const selectEl = document.getElementById('drm-clip-select');
+    const clipIdEl = document.getElementById('drm-clip-id');
+    if (!selectEl || !clipIdEl) return;
+    clipIdEl.value = String(selectEl.value || '').trim();
+}
+
+function selectClipForPlayback(filename, clipId = '') {
+    const resolvedClipId = String(clipId || findDeckClipIdByName(filename) || '').trim();
+    const clipIdEl = document.getElementById('drm-clip-id');
+    const clipSelectEl = document.getElementById('drm-clip-select');
+    const statusEl = document.getElementById('drm-playback-status');
+
+    if (clipIdEl) clipIdEl.value = resolvedClipId;
+    if (clipSelectEl && resolvedClipId) clipSelectEl.value = resolvedClipId;
+
+    if (statusEl) {
+        if (resolvedClipId) statusEl.innerText = `Selected clip ${resolvedClipId} (${filename}).`;
+        else statusEl.innerText = `Could not map ${filename} to a clip id. Enter clip id manually.`;
+    }
+}
+
+async function loadDeckClipOptions() {
+    if (!activeDeckRecordingsHost) return;
+    const slotEl = document.getElementById('drm-slot');
+    const clipSelectEl = document.getElementById('drm-clip-select');
+    const playbackStatusEl = document.getElementById('drm-playback-status');
+    const clipIdEl = document.getElementById('drm-clip-id');
+    if (!clipSelectEl) return;
+
+    const slotId = (slotEl?.value || '1').trim() || '1';
+    const previous = String(clipSelectEl.value || clipIdEl?.value || '').trim();
+
+    clipSelectEl.innerHTML = '<option value="">Select a clip from list...</option>';
+    currentDeckClipMap = [];
+
+    try {
+        const res = await fetch(`/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/clips?slot_id=${encodeURIComponent(slotId)}`);
+        let data;
+        try { data = await res.json(); } catch (_) { data = {}; }
+
+        if (!res.ok) {
+            if (playbackStatusEl) playbackStatusEl.innerText = `Could not load clips: ${data.detail || 'Unknown error'}`;
+            return;
+        }
+
+        const clips = Array.isArray(data.clips) ? data.clips : [];
+        currentDeckClipMap = clips.map((clip) => ({
+            id: String(clip.id || ''),
+            name: String(clip.name || ''),
+            label: String(clip.label || clip.name || clip.id || ''),
+        })).filter((clip) => clip.id);
+
+        currentDeckClipMap.forEach((clip) => {
+            const option = document.createElement('option');
+            option.value = clip.id;
+            option.textContent = `${clip.id}: ${clip.label || clip.name || `clip ${clip.id}`}`;
+            clipSelectEl.appendChild(option);
+        });
+
+        if (previous && currentDeckClipMap.some((clip) => clip.id === previous)) {
+            clipSelectEl.value = previous;
+        }
+
+        if (playbackStatusEl) {
+            const source = String(data.source || 'hyperdeck');
+            playbackStatusEl.innerText = `${currentDeckClipMap.length} clip(s) loaded (${source}).`;
+        }
+    } catch (_) {
+        if (playbackStatusEl) playbackStatusEl.innerText = 'Could not reach backend API for clip list.';
+    }
+}
+
+async function uploadDeckPlaybackFile() {
+    if (!activeDeckRecordingsHost) return;
+    const fileInput = document.getElementById('drm-upload-file');
+    const statusEl = document.getElementById('drm-upload-status');
+    const progressWrap = document.getElementById('drm-upload-progress-wrap');
+    const progressBar = document.getElementById('drm-upload-progress-bar');
+    const progressText = document.getElementById('drm-upload-progress-text');
+    const slotEl = document.getElementById('drm-slot');
+    const btn = document.getElementById('btn-drm-upload');
+    const file = fileInput?.files && fileInput.files[0];
+    if (!file) {
+        if (statusEl) statusEl.innerText = 'Select a media file first.';
+        return;
+    }
+
+    const slotId = (slotEl?.value || '1').trim() || '1';
+    const form = new FormData();
+    form.append('file', file);
+
+    if (btn) {
+        btn.disabled = true;
+        btn.innerText = 'Uploading…';
+    }
+    if (progressWrap) progressWrap.classList.remove('hidden');
+    if (progressBar) progressBar.style.width = '0%';
+    if (progressText) progressText.innerText = '0%';
+    if (statusEl) statusEl.innerText = `Uploading ${file.name} to slot ${slotId}...`;
+
+    try {
+        const data = await new Promise((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', `/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/upload-playback?slot_id=${encodeURIComponent(slotId)}`);
+
+            xhr.upload.onprogress = (event) => {
+                if (!event.lengthComputable) return;
+                const pct = Math.max(0, Math.min(100, Math.round((event.loaded / Math.max(event.total, 1)) * 100)));
+                if (progressBar) progressBar.style.width = `${pct}%`;
+                if (progressText) progressText.innerText = `${pct}%`;
+            };
+
+            xhr.onerror = () => reject(new Error('network'));
+            xhr.onload = () => {
+                let parsed = {};
+                try {
+                    parsed = xhr.responseText ? JSON.parse(xhr.responseText) : {};
+                } catch (_) {
+                    parsed = {};
+                }
+                if (xhr.status < 200 || xhr.status >= 300) {
+                    reject(new Error(parsed.detail || 'Unknown error'));
+                    return;
+                }
+                resolve(parsed);
+            };
+
+            xhr.send(form);
+        });
+
+        if (progressBar) progressBar.style.width = '100%';
+        if (progressText) progressText.innerText = '100%';
+        if (statusEl) statusEl.innerText = `Uploaded ${data.filename || file.name} (${formatBytes(data.size || file.size)}).`;
+        await loadDeckRecordingsList();
+    } catch (err) {
+        const message = (err && err.message) ? err.message : 'Could not reach backend API.';
+        if (statusEl) statusEl.innerText = `Upload failed: ${message}`;
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerText = 'Upload';
+        }
+    }
+}
+
+async function cueDeckPlayback() {
+    if (!activeDeckRecordingsHost) return;
+    const clipEl = document.getElementById('drm-clip-id');
+    const statusEl = document.getElementById('drm-playback-status');
+    const clipId = String(clipEl?.value || '').trim();
+    if (!clipId) {
+        if (statusEl) statusEl.innerText = 'Clip ID is required to cue playback.';
+        return;
+    }
+
+    try {
+        const res = await fetch(`/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/cue`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ clip_id: clipId }),
+        });
+        let data;
+        try { data = await res.json(); } catch (_) { data = {}; }
+        if (!res.ok) {
+            if (statusEl) statusEl.innerText = `Cue failed: ${data.detail || 'Unknown error'}`;
+            return;
+        }
+        if (statusEl) statusEl.innerText = `Cued clip ${clipId}.`;
+        updateDashboardMetrics();
+    } catch (_) {
+        if (statusEl) statusEl.innerText = 'Cue failed: Could not reach backend API.';
+    }
+}
+
+async function playDeckNow() {
+    if (!activeDeckRecordingsHost) return;
+    const statusEl = document.getElementById('drm-playback-status');
+    const clipIdEl = document.getElementById('drm-clip-id');
+    const clipId = String(clipIdEl?.value || '').trim();
+    try {
+        const body = clipId ? JSON.stringify({ clip_id: clipId }) : undefined;
+        const res = await fetch(`/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/play`, {
+            method: 'POST',
+            headers: body ? { 'Content-Type': 'application/json' } : undefined,
+            body,
+        });
+        let data;
+        try { data = await res.json(); } catch (_) { data = {}; }
+        if (!res.ok) {
+            if (statusEl) statusEl.innerText = `Play failed: ${data.detail || 'Unknown error'}`;
+            return;
+        }
+        if (statusEl) statusEl.innerText = 'Playback started.';
+        updateDashboardMetrics();
+    } catch (_) {
+        if (statusEl) statusEl.innerText = 'Play failed: Could not reach backend API.';
+    }
+}
+
+async function playDeckNowFromCard(host) {
+    try {
+        const res = await fetch(`/api/control/${encodeURIComponent(host)}/play`, { method: 'POST' });
+        let data;
+        try { data = await res.json(); } catch (_) { data = {}; }
+        if (!res.ok) {
+            alert(`Play failed on ${host}: ${data.detail || 'Unknown error'}`);
+            return;
+        }
+        updateDashboardMetrics();
+    } catch (_) {
+        alert(`Play failed on ${host}: Could not reach backend API.`);
+    }
+}
+
+async function scheduleDeckPlayback() {
+    if (!activeDeckRecordingsHost) return;
+    const clipEl = document.getElementById('drm-clip-id');
+    const playAtEl = document.getElementById('drm-play-at');
+    const statusEl = document.getElementById('drm-playback-status');
+
+    const playAtLocal = String(playAtEl?.value || '').trim();
+    if (!playAtLocal) {
+        if (statusEl) statusEl.innerText = 'Choose a Play At time first.';
+        return;
+    }
+    const playAtIso = new Date(playAtLocal).toISOString();
+    const clipId = String(clipEl?.value || '').trim();
+
+    try {
+        const res = await fetch(`/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/play-schedule`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ play_at: playAtIso, clip_id: clipId }),
+        });
+        let data;
+        try { data = await res.json(); } catch (_) { data = {}; }
+        if (!res.ok) {
+            if (statusEl) statusEl.innerText = `Schedule failed: ${data.detail || 'Unknown error'}`;
+            return;
+        }
+        if (statusEl) statusEl.innerText = `Scheduled playback at ${new Date(playAtIso).toLocaleString()}.`;
+        updateDashboardMetrics();
+    } catch (_) {
+        if (statusEl) statusEl.innerText = 'Schedule failed: Could not reach backend API.';
+    }
+}
+
+async function cancelDeckPlaybackSchedule() {
+    if (!activeDeckRecordingsHost) return;
+    const statusEl = document.getElementById('drm-playback-status');
+    try {
+        const res = await fetch(`/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/play-schedule`, { method: 'DELETE' });
+        let data;
+        try { data = await res.json(); } catch (_) { data = {}; }
+        if (!res.ok) {
+            if (statusEl) statusEl.innerText = `Cancel failed: ${data.detail || 'Unknown error'}`;
+            return;
+        }
+        if (statusEl) statusEl.innerText = 'Scheduled playback cancelled.';
+        updateDashboardMetrics();
+    } catch (_) {
+        if (statusEl) statusEl.innerText = 'Cancel failed: Could not reach backend API.';
     }
 }
 
@@ -1751,18 +2070,28 @@ async function openDeckRecordings(host, name) {
     const hostLabel = document.getElementById('deck-recordings-host');
     const listEl = document.getElementById('deck-recordings-list');
     const statusEl = document.getElementById('deck-recordings-status');
+    const uploadStatusEl = document.getElementById('drm-upload-status');
+    const playbackStatusEl = document.getElementById('drm-playback-status');
+    const clipSelectEl = document.getElementById('drm-clip-select');
+    const clipIdEl = document.getElementById('drm-clip-id');
     const closeBtn = modal ? modal.querySelector('button[aria-label="Close deck recordings"]') : null;
     if (!modal || !hostLabel || !listEl || !statusEl) return;
 
     hostLabel.innerText = `${name} — ${host}`;
     listEl.innerHTML = '<div class="text-[11px] text-slate-500 px-2 py-2">Loading recordings…</div>';
     statusEl.innerText = '';
+    if (uploadStatusEl) uploadStatusEl.innerText = '';
+    if (playbackStatusEl) playbackStatusEl.innerText = '';
+    if (clipSelectEl) clipSelectEl.innerHTML = '<option value="">Select a clip from list...</option>';
+    if (clipIdEl) clipIdEl.value = '';
+    currentDeckClipMap = [];
 
     modal.classList.remove('hidden');
     document.body.classList.add('overflow-hidden');
     if (closeBtn) closeBtn.focus();
 
     await loadDeckSlotOptions();
+    await loadDeckClipOptions();
     await loadDeckRecordingsList();
 }
 
@@ -2201,6 +2530,15 @@ Object.assign(window, {
     handleDeckRecordingsBackdropClick,
     loadDeckRecordingsList,
     transferDeckRecording,
+    onDeckClipSelectionChanged,
+    selectClipForPlayback,
+    loadDeckClipOptions,
+    uploadDeckPlaybackFile,
+    cueDeckPlayback,
+    playDeckNow,
+    scheduleDeckPlayback,
+    cancelDeckPlaybackSchedule,
+    playDeckNowFromCard,
     sendDeckCommand,
     sendCommandToAll,
     openDeckSettings,
