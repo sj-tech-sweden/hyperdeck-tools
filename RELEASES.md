@@ -1,6 +1,6 @@
 # Release Notes
 
-## v1.0.0 — Initial Release
+## v0.1.0 — Initial Release
 
 First stable release of HyperDeck Tools — a web-based control panel for multi-HyperDeck workflows.
 
