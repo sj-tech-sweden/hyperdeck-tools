@@ -41,6 +41,53 @@ python run.py
 Open:
 - `http://localhost:8008`
 
+## Run as a systemd Service (Linux)
+
+Create a service file:
+
+```bash
+sudo nano /etc/systemd/system/hyperdeck-tools.service
+```
+
+Paste the following (adjust paths and user as needed):
+
+```ini
+[Unit]
+Description=HyperDeck Tools
+After=network.target
+
+[Service]
+Type=simple
+User=your-user
+WorkingDirectory=/path/to/hyperdeck-tools
+ExecStart=/usr/bin/python3 run.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Enable and start:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable hyperdeck-tools
+sudo systemctl start hyperdeck-tools
+```
+
+Check status:
+
+```bash
+sudo systemctl status hyperdeck-tools
+```
+
+View logs:
+
+```bash
+journalctl -u hyperdeck-tools -f
+```
+
 ## Excel Upload Plugin
 
 Plugin name: `excel_schedule_uploader`
