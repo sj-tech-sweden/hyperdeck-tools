@@ -587,6 +587,7 @@ function updateStageModeUI() {
 async function updateDashboardMetrics() {
     try {
         const res = await fetch('/api/state');
+        if (!res.ok) return;
         const state = await res.json();
         const container = document.getElementById('decks-container');
 
@@ -615,13 +616,20 @@ async function updateDashboardMetrics() {
         }
 
         let html = '';
+        let allRecording = true;
+        let anyRecording = false;
         for (const [ip, item] of Object.entries(state)) {
             const transportStatus = String(item.transport_status || item.status || '').toLowerCase();
-            const isRecording = transportStatus === 'recording' || transportStatus === 'record';
+            const isRecording = transportStatus === 'recording' || transportStatus === 'record' || transportStatus.startsWith('record');
             const isPlaying = transportStatus === 'playing' || transportStatus === 'play' || transportStatus === 'forward';
+            if (!isRecording) allRecording = false;
+            if (isRecording) anyRecording = true;
             const pulseClass = isRecording
                 ? 'bg-red-500 animate-pulse'
                 : (isPlaying ? 'bg-sky-500 animate-pulse' : (item.connected ? 'bg-emerald-500' : 'bg-rose-500'));
+            const badgeClass = isRecording
+                ? 'bg-red-500/20 text-red-300 border-red-500/30'
+                : (isPlaying ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30' : 'bg-slate-800 text-slate-300 ring-slate-700');
             const statusLabel = item.connected ? (item.status === 'Online' ? 'Online' : item.status) : item.status;
             // JSON literals are HTML-escaped before inserting into inline attributes.
             const jsIpAttr = escHtml(JSON.stringify(ip));
@@ -640,7 +648,7 @@ async function updateDashboardMetrics() {
                         <h3 class="font-semibold text-white text-base">${escHtml(item.name)}</h3>
                         <p class="text-xs text-slate-400 font-mono">${escHtml(ip)}</p>
                     </div>
-                    <span class="inline-flex items-center gap-x-1.5 rounded-full px-2 py-1 text-xs font-medium text-white ring-1 ring-inset ring-slate-800">
+                    <span class="inline-flex items-center gap-x-1.5 rounded-full px-2 py-1 text-xs font-medium border ${badgeClass}">
                         <svg class="h-1.5 w-1.5 ${pulseClass} rounded-full" viewBox="0 0 6 6" aria-hidden="true"><circle cx="3" cy="3" r="3" /></svg>
                         ${escHtml(statusLabel)}
                     </span>
@@ -668,8 +676,9 @@ async function updateDashboardMetrics() {
                 <!-- Per-deck transport controls -->
                 <div class="mt-4 flex items-center gap-2 border-t border-slate-800 pt-3">
                     <button onclick="sendDeckCommand(${jsIpAttr}, 'record')"
-                        class="flex-1 rounded bg-red-600/90 hover:bg-red-500 px-2 py-1.5 text-xs font-semibold text-white transition cursor-pointer">
-                        ⏺ Record
+                        ${isRecording ? 'disabled' : ''}
+                        class="flex-1 rounded px-2 py-1.5 text-xs font-semibold text-white transition cursor-pointer ${isRecording ? 'bg-red-900/50 text-red-300/50 cursor-not-allowed' : 'bg-red-600/90 hover:bg-red-500'}">
+                        ⏺ ${isRecording ? 'Recording' : 'Record'}
                     </button>
                     <button onclick="playDeckNowFromCard(${jsIpAttr})"
                         class="flex-1 rounded bg-emerald-600/90 hover:bg-emerald-500 px-2 py-1.5 text-xs font-semibold text-white transition cursor-pointer">
@@ -691,12 +700,26 @@ async function updateDashboardMetrics() {
             </div>`;
         }
         container.innerHTML = html;
+
+        const recordAllBtn = document.getElementById('btn-record-all');
+        if (recordAllBtn) {
+            if (allRecording && Object.keys(state).length > 0) {
+                recordAllBtn.disabled = true;
+                recordAllBtn.innerText = '⏺ All Recording';
+                recordAllBtn.className = 'rounded-md bg-red-900/50 px-4 py-2 text-sm font-semibold text-red-300/50 cursor-not-allowed transition';
+            } else {
+                recordAllBtn.disabled = false;
+                recordAllBtn.innerText = '⏺ Record All';
+                recordAllBtn.className = 'rounded-md bg-red-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-red-500 transition cursor-pointer';
+            }
+        }
     } catch (e) { console.error("Error updates tracking dropped out: ", e); }
 }
 
 async function pullConfigurationMatrix() {
     try {
         const res = await fetch('/api/config');
+        if (!res.ok) return;
         localConfigCache = ensureConfigShape(await res.json());
         
         document.getElementById('cfg-template').value = localConfigCache.filename_template;
@@ -745,7 +768,7 @@ function createDestinationRowElement(path = '') {
     const div = document.createElement('div');
     div.className = 'flex gap-2 items-center row-destination-item';
     div.innerHTML = `
-        <input type="text" placeholder="/mnt/storage/ingest" value="${path}" class="dest-path block w-full rounded-md border-0 bg-slate-950 px-2 py-1 text-xs text-white ring-1 ring-inset ring-slate-800 focus:outline-none font-mono">
+        <input type="text" placeholder="/mnt/storage/ingest" value="${escHtml(path)}" class="dest-path block w-full rounded-md border-0 bg-slate-950 px-2 py-1 text-xs text-white ring-1 ring-inset ring-slate-800 focus:outline-none font-mono">
         <button onclick="openFolderBrowser(this.previousElementSibling)" class="text-xs text-indigo-400 hover:text-indigo-300 font-medium cursor-pointer p-1" title="Browse host directory">📁</button>
         <button onclick="this.parentElement.remove()" class="text-rose-500 text-xs px-1 hover:text-rose-400 cursor-pointer">✕</button>
     `;
@@ -770,9 +793,9 @@ function createDeckRowElement(name='', ip='', stage='') {
     const div = document.createElement('div');
     div.className = 'flex gap-2 items-center row-deck-item';
     div.innerHTML = `
-        <input type="text" placeholder="Device Label" value="${name}" class="d-name block w-1/3 rounded-md border-0 bg-slate-950 px-2 py-1 text-xs text-white ring-1 ring-inset ring-slate-800 focus:outline-none">
-        <input type="text" placeholder="IP / Hostname" value="${ip}" class="d-ip block w-1/3 rounded-md border-0 bg-slate-950 px-2 py-1 text-xs text-white ring-1 ring-inset ring-slate-800 focus:outline-none">
-        <input type="text" list="cfg-stage-options" placeholder="Stage" value="${stage}" class="d-stage block w-1/3 rounded-md border-0 bg-slate-950 px-2 py-1 text-xs text-white ring-1 ring-inset ring-slate-800 focus:outline-none">
+        <input type="text" placeholder="Device Label" value="${escHtml(name)}" class="d-name block w-1/3 rounded-md border-0 bg-slate-950 px-2 py-1 text-xs text-white ring-1 ring-inset ring-slate-800 focus:outline-none">
+        <input type="text" placeholder="IP / Hostname" value="${escHtml(ip)}" class="d-ip block w-1/3 rounded-md border-0 bg-slate-950 px-2 py-1 text-xs text-white ring-1 ring-inset ring-slate-800 focus:outline-none">
+        <input type="text" list="cfg-stage-options" placeholder="Stage" value="${escHtml(stage)}" class="d-stage block w-1/3 rounded-md border-0 bg-slate-950 px-2 py-1 text-xs text-white ring-1 ring-inset ring-slate-800 focus:outline-none">
         <button onclick="this.parentElement.remove()" class="text-rose-500 text-xs px-1 hover:text-rose-400 cursor-pointer">✕</button>
     `;
     return div;
@@ -873,10 +896,10 @@ async function triggerDiscovery() {
                 li.className = "py-2.5 flex justify-between items-center text-sm text-slate-200";
                 li.innerHTML = `
                     <div class="min-w-0">
-                        <span class="font-mono font-medium">${ip}</span>
-                        ${alreadyAdded ? `<div class="text-[11px] text-emerald-300 mt-0.5">Already added as ${existingDeckName}</div>` : ''}
+                        <span class="font-mono font-medium">${escHtml(ip)}</span>
+                        ${alreadyAdded ? `<div class="text-[11px] text-emerald-300 mt-0.5">Already added as ${escHtml(existingDeckName)}</div>` : ''}
                     </div>
-                    <button ${alreadyAdded ? 'disabled' : `onclick="addDeckToConfigRow('New_HyperDeck', '${ip}')"`} class="text-xs px-2 py-1 rounded border transition ${alreadyAdded ? 'bg-emerald-600/10 text-emerald-300 border-emerald-500/30 cursor-not-allowed' : 'bg-indigo-600/30 text-indigo-400 border-indigo-500/30 hover:bg-indigo-600 hover:text-white cursor-pointer'}">
+                    <button ${alreadyAdded ? 'disabled' : `onclick="addDeckToConfigRow('New_HyperDeck', '${escHtml(ip)}')"`} class="text-xs px-2 py-1 rounded border transition ${alreadyAdded ? 'bg-emerald-600/10 text-emerald-300 border-emerald-500/30 cursor-not-allowed' : 'bg-indigo-600/30 text-indigo-400 border-indigo-500/30 hover:bg-indigo-600 hover:text-white cursor-pointer'}">
                         ${alreadyAdded ? 'Already Added' : '+ Add to System'}
                     </button>
                 `;
@@ -937,8 +960,8 @@ async function navigateFolder(targetPath = "") {
             const nestedFullPath = `${data.current_path.endsWith('/') || data.current_path.endsWith('\\') ? data.current_path : data.current_path + '/'}${dirName}`;
             li.className = "flex justify-between items-center py-2 px-3 hover:bg-slate-900 text-slate-300 transition group rounded";
             li.innerHTML = `
-                <button onclick="navigateFolder('${nestedFullPath.replace(/\\/g, '\\\\')}')" class="text-left w-full flex items-center gap-2 font-medium hover:text-white cursor-pointer truncate">
-                    <span>📁</span> <span class="truncate">${dirName}</span>
+                <button onclick="navigateFolder('${escHtml(nestedFullPath.replace(/\\/g, '\\\\'))}')" class="text-left w-full flex items-center gap-2 font-medium hover:text-white cursor-pointer truncate">
+                    <span>📁</span> <span class="truncate">${escHtml(dirName)}</span>
                 </button>
             `;
             list.appendChild(li);
@@ -1212,7 +1235,7 @@ async function saveScheduleFromMatrix() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
-    });
+    }).then(res => { if (!res.ok) throw new Error('Failed to save schedule'); });
 
     renderScheduleMatrix(scheduleDataCache, true);
 
@@ -1372,7 +1395,7 @@ async function clearScheduleForManualMode() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify([])
-    });
+    }).then(res => { if (!res.ok) throw new Error('Failed to clear schedule'); });
     renderScheduleMatrix([]);
 }
 
@@ -1663,6 +1686,39 @@ function filterDeckSettingsByScope(settings) {
     return filtered;
 }
 
+// --- Shared Settings Groups API helpers ---
+async function _fetchSettingsGroups() {
+    const res = await fetch('/api/control/settings-groups');
+    if (!res.ok) return {};
+    const data = await res.json();
+    return (data && typeof data.groups === 'object' && data.groups) ? data.groups : {};
+}
+
+async function _saveSettingsGroup(name, targets, settings, field_keys) {
+    const res = await fetch('/api/control/settings-groups', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, targets, settings, field_keys }),
+    });
+    let data;
+    try { data = await res.json(); } catch (_) { data = {}; }
+    return { ok: res.ok, data };
+}
+
+async function _applySettingsGroup(name) {
+    const res = await fetch(`/api/control/settings-groups/${encodeURIComponent(name)}/apply`, { method: 'POST' });
+    let data;
+    try { data = await res.json(); } catch (_) { data = {}; }
+    return { ok: res.ok, data };
+}
+
+async function _deleteSettingsGroup(name) {
+    const res = await fetch(`/api/control/settings-groups/${encodeURIComponent(name)}`, { method: 'DELETE' });
+    let data;
+    try { data = await res.json(); } catch (_) { data = {}; }
+    return { ok: res.ok, data };
+}
+
 function renderDeckSettingsGroupOptions() {
     const groupSelect = document.getElementById('ds-group-select');
     if (!groupSelect) return;
@@ -1680,19 +1736,11 @@ function renderDeckSettingsGroupOptions() {
 
 async function loadDeckSettingsGroups() {
     try {
-        const res = await fetch('/api/control/settings-groups');
-        if (!res.ok) {
-            deckSettingsGroupsCache = {};
-            renderDeckSettingsGroupOptions();
-            return;
-        }
-        const data = await res.json();
-        deckSettingsGroupsCache = (data && typeof data.groups === 'object' && data.groups) ? data.groups : {};
-        renderDeckSettingsGroupOptions();
+        deckSettingsGroupsCache = await _fetchSettingsGroups();
     } catch (_) {
         deckSettingsGroupsCache = {};
-        renderDeckSettingsGroupOptions();
     }
+    renderDeckSettingsGroupOptions();
 }
 
 function onDeckSettingsGroupSelected() {
@@ -1769,15 +1817,9 @@ async function saveDeckSettingsGroup() {
     }
 
     try {
-        const res = await fetch('/api/control/settings-groups', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, targets, settings, field_keys }),
-        });
-        let data;
-        try { data = await res.json(); } catch (_) { data = {}; }
+        const { ok, data } = await _saveSettingsGroup(name, targets, settings, field_keys);
 
-        if (!res.ok) {
+        if (!ok) {
             if (statusEl) statusEl.innerText = `Save group failed: ${data.detail || 'Unknown error'}`;
             return;
         }
@@ -1803,10 +1845,8 @@ async function applyDeckSettingsGroup() {
     }
 
     try {
-        const res = await fetch(`/api/control/settings-groups/${encodeURIComponent(name)}/apply`, { method: 'POST' });
-        let data;
-        try { data = await res.json(); } catch (_) { data = {}; }
-        if (!res.ok) {
+        const { ok, data } = await _applySettingsGroup(name);
+        if (!ok) {
             if (statusEl) statusEl.innerText = `Apply group failed: ${data.detail || 'Unknown error'}`;
             return;
         }
@@ -1829,10 +1869,8 @@ async function deleteDeckSettingsGroup() {
     if (!window.confirm(`Delete settings group '${name}'?`)) return;
 
     try {
-        const res = await fetch(`/api/control/settings-groups/${encodeURIComponent(name)}`, { method: 'DELETE' });
-        let data;
-        try { data = await res.json(); } catch (_) { data = {}; }
-        if (!res.ok) {
+        const { ok, data } = await _deleteSettingsGroup(name);
+        if (!ok) {
             if (statusEl) statusEl.innerText = `Delete group failed: ${data.detail || 'Unknown error'}`;
             return;
         }
@@ -2029,19 +2067,11 @@ function renderSettingsGroupsSelect() {
 
 async function loadSettingsGroupsModalGroups() {
     try {
-        const res = await fetch('/api/control/settings-groups');
-        if (!res.ok) {
-            deckSettingsGroupsCache = {};
-            renderSettingsGroupsSelect();
-            return;
-        }
-        const data = await res.json();
-        deckSettingsGroupsCache = (data && typeof data.groups === 'object' && data.groups) ? data.groups : {};
-        renderSettingsGroupsSelect();
+        deckSettingsGroupsCache = await _fetchSettingsGroups();
     } catch (_) {
         deckSettingsGroupsCache = {};
-        renderSettingsGroupsSelect();
     }
+    renderSettingsGroupsSelect();
 }
 
 function onSettingsGroupsGroupSelected() {
@@ -2127,14 +2157,8 @@ async function saveSettingsGroupsGroup() {
     }
 
     try {
-        const res = await fetch('/api/control/settings-groups', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, targets, settings: scopedSettings, field_keys: scopeKeys }),
-        });
-        let data;
-        try { data = await res.json(); } catch (_) { data = {}; }
-        if (!res.ok) {
+        const { ok, data } = await _saveSettingsGroup(name, targets, scopedSettings, scopeKeys);
+        if (!ok) {
             if (statusEl) statusEl.innerText = `Save failed: ${data.detail || 'Unknown error'}`;
             return;
         }
@@ -2156,10 +2180,8 @@ async function applySettingsGroupsGroup() {
         return;
     }
     try {
-        const res = await fetch(`/api/control/settings-groups/${encodeURIComponent(name)}/apply`, { method: 'POST' });
-        let data;
-        try { data = await res.json(); } catch (_) { data = {}; }
-        if (!res.ok) {
+        const { ok, data } = await _applySettingsGroup(name);
+        if (!ok) {
             if (statusEl) statusEl.innerText = `Apply failed: ${data.detail || 'Unknown error'}`;
             return;
         }
@@ -2182,10 +2204,8 @@ async function deleteSettingsGroupsGroup() {
     if (!window.confirm(`Delete settings group '${name}'?`)) return;
 
     try {
-        const res = await fetch(`/api/control/settings-groups/${encodeURIComponent(name)}`, { method: 'DELETE' });
-        let data;
-        try { data = await res.json(); } catch (_) { data = {}; }
-        if (!res.ok) {
+        const { ok, data } = await _deleteSettingsGroup(name);
+        if (!ok) {
             if (statusEl) statusEl.innerText = `Delete failed: ${data.detail || 'Unknown error'}`;
             return;
         }
@@ -3457,6 +3477,17 @@ async function loadPluginManagerSystem() {
 
 // Application execution setups
 pullConfigurationMatrix();
-setInterval(updateDashboardMetrics, 2000);
+let _dashboardPollInterval = null;
+function _startDashboardPolling() {
+    if (_dashboardPollInterval) return;
+    _dashboardPollInterval = setInterval(updateDashboardMetrics, 2000);
+}
+function _stopDashboardPolling() {
+    if (_dashboardPollInterval) { clearInterval(_dashboardPollInterval); _dashboardPollInterval = null; }
+}
+document.addEventListener('visibilitychange', () => {
+    if (document.hidden) { _stopDashboardPolling(); } else { _startDashboardPolling(); updateDashboardMetrics(); }
+});
+_startDashboardPolling();
 updateDashboardMetrics();
 loadPluginManagerSystem();

@@ -6,7 +6,10 @@ import inspect
 import ast
 import asyncio
 import logging
+import platform
 import re
+import tempfile
+from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any, Optional
 from fastapi import FastAPI, HTTPException, UploadFile, File
@@ -14,26 +17,27 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
-app = FastAPI()
 logger = logging.getLogger(__name__)
 
+CORS_ORIGINS = [o.strip() for o in os.environ.get("HYPERDECK_CORS_ORIGINS", "*").split(",") if o.strip()]
+CORS_ALLOW_CREDENTIALS = os.environ.get("HYPERDECK_CORS_CREDENTIALS", "true").lower() == "true"
 
-@app.on_event("startup")
-async def startup_background_workers():
-    from app.backend.core_daemon import start_background_monitor
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    from app.backend.core_daemon import start_background_monitor, stop_background_monitor
     start_background_monitor()
-
-
-@app.on_event("shutdown")
-async def shutdown_background_workers():
-    from app.backend.core_daemon import stop_background_monitor
+    yield
     await stop_background_monitor()
 
-# Enable CORS so your frontend can chat with the backend smoothly
+
+app = FastAPI(lifespan=lifespan)
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=CORS_ORIGINS,
+    allow_credentials=CORS_ALLOW_CREDENTIALS,
     allow_headers=["*"],
     allow_methods=["*"],
 )
@@ -60,6 +64,23 @@ DEFAULT_CONFIG = {
     },
     "settings_groups": {},
 }
+
+
+def _atomic_json_write(file_path: str, data: Any) -> None:
+    """Write JSON data atomically using a temp file + rename."""
+    dir_name = os.path.dirname(file_path) or "."
+    fd, tmp_path = tempfile.mkstemp(dir=dir_name, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4)
+        os.replace(tmp_path, file_path)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
 
 SLATE_SETTING_KEYS: tuple[str, ...] = (
     "reel",
@@ -143,15 +164,14 @@ os.makedirs(UPLOADS_DIR, exist_ok=True)
 def load_active_event():
     if os.path.exists(ACTIVE_EVENT_FILE):
         try:
-            with open(ACTIVE_EVENT_FILE, 'r') as f:
+            with open(ACTIVE_EVENT_FILE, 'r', encoding="utf-8") as f:
                 return json.load(f)
         except Exception:
             pass
     return {"id": "default", "planned_title": "", "notes": ""}
 
 def save_active_event(data):
-    with open(ACTIVE_EVENT_FILE, 'w') as f:
-        json.dump(data, f, indent=4)
+    _atomic_json_write(ACTIVE_EVENT_FILE, data)
 
 
 def is_hyperdeck_success_code(code: Any) -> bool:
@@ -529,15 +549,14 @@ async def set_active_metadata_context(event: dict):
 def load_schedule():
     if os.path.exists(SCHEDULE_FILE):
         try:
-            with open(SCHEDULE_FILE, 'r') as f:
+            with open(SCHEDULE_FILE, 'r', encoding="utf-8") as f:
                 return json.load(f)
         except Exception:
             pass
     return []
 
 def save_schedule(data):
-    with open(SCHEDULE_FILE, 'w') as f:
-        json.dump(data, f, indent=4)
+    _atomic_json_write(SCHEDULE_FILE, data)
 
 def normalize_schedule_item(raw: dict[str, Any], index: int) -> dict[str, Any]:
     start_time = str(raw.get("start_time") or "").strip()
@@ -601,6 +620,8 @@ def read_plugin_manifest(plugin_name: str) -> dict[str, Any]:
     return manifest
 
 def load_plugin_module(plugin_name: str):
+    if not re.fullmatch(r"[a-zA-Z0-9_]+", plugin_name):
+        raise HTTPException(status_code=400, detail="Invalid plugin name.")
     plugin_path = os.path.join(PLUGINS_DIR, f"{plugin_name}.py")
     if not os.path.exists(plugin_path):
         raise HTTPException(status_code=404, detail="Requested sync profile plugin not found.")
@@ -972,9 +993,12 @@ async def upload_plugin_source_file(plugin_name: str, file: UploadFile = File(..
     filename = os.path.basename(file.filename)
     target_path = os.path.join(UPLOADS_DIR, filename)
     try:
-        content = await file.read()
         with open(target_path, "wb") as f:
-            f.write(content)
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                f.write(chunk)
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"Could not store uploaded file: {exc}")
 
@@ -985,7 +1009,7 @@ async def upload_plugin_source_file(plugin_name: str, file: UploadFile = File(..
 @app.get("/api/config")
 async def get_config():
     if os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE, 'r') as f:
+        with open(CONFIG_FILE, 'r', encoding="utf-8") as f:
             return normalize_config_payload(json.load(f))
     return dict(DEFAULT_CONFIG)
 
@@ -996,8 +1020,7 @@ async def save_config(config: dict):
     existing = await get_config()
     merged = {**existing, **(config or {})}
     normalized = normalize_config_payload(merged)
-    with open(CONFIG_FILE, 'w') as f:
-        json.dump(normalized, f, indent=4)
+    _atomic_json_write(CONFIG_FILE, normalized)
     # Pro Tip: Trigger your background daemon to reload its configuration here if needed!
     return {"status": "success"}
 
@@ -1459,25 +1482,43 @@ async def upload_deck_playback_file(host: str, slot_id: str = "1", file: UploadF
     if any(part in filename for part in ("/", "\\", "..")):
         raise HTTPException(status_code=400, detail="Invalid filename.")
 
-    payload = await file.read()
-    if not payload:
-        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
-
-    from app.backend.core_daemon import upload_playback_file_to_deck
-
+    tmp_path = None
     try:
-        uploaded = await upload_playback_file_to_deck(host, slot_id, filename, payload)
+        fd, tmp_path = tempfile.mkstemp(suffix=os.path.splitext(filename)[1])
+        os.close(fd)
+        total_size = 0
+        with open(tmp_path, "wb") as tmp_file:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                tmp_file.write(chunk)
+                total_size += len(chunk)
+        if total_size == 0:
+            raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+
+        from app.backend.core_daemon import upload_playback_file_to_deck
+
+        uploaded = await upload_playback_file_to_deck(host, slot_id, filename, tmp_path)
+    except HTTPException:
+        raise
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"FTP upload failed: {exc}") from exc
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
 
     return {
         "status": "ok",
         "host": host,
         "slot_id": str(slot_id),
         "filename": uploaded.get("filename", filename),
-        "size": int(uploaded.get("size", len(payload)) or len(payload)),
+        "size": int(uploaded.get("size", total_size) or total_size),
     }
 
 
@@ -1502,6 +1543,8 @@ async def cue_deck_playback(host: str, payload: dict[str, Any]):
 async def play_deck_now(host: str, payload: dict[str, Any] | None = None):
     """Start playback on a deck."""
     await _validate_deck_host(host)
+    decks = await _load_all_deck_hosts()
+    deck_name = next((name for name, value in decks.items() if value == host), host)
     clip_id = str((payload or {}).get("clip_id") or "").strip()
 
     if clip_id:
@@ -1513,7 +1556,7 @@ async def play_deck_now(host: str, payload: dict[str, Any] | None = None):
         if not is_hyperdeck_success_code(cue_parsed.get("_code")):
             raise HTTPException(status_code=502, detail=f"Deck rejected cue command: {cue_response}")
 
-    result = await _send_command_to_deck(host, host, "play")
+    result = await _send_command_to_deck(deck_name, host, "play")
     if not result.get("success"):
         status_code = result.get("status_code", 502)
         detail = result.get("response") if status_code != 502 else f"Deck rejected play command: {result.get('response')}"
@@ -1836,8 +1879,7 @@ async def save_settings_group(payload: dict[str, Any]):
     groups[name] = {"targets": targets, "settings": settings, "field_keys": field_keys}
 
     config["settings_groups"] = groups
-    with open(CONFIG_FILE, 'w') as f:
-        json.dump(normalize_config_payload(config), f, indent=4)
+    _atomic_json_write(CONFIG_FILE, normalize_config_payload(config))
 
     return {"status": "ok", "name": name, "group": groups[name]}
 
@@ -1855,8 +1897,7 @@ async def delete_settings_group(group_name: str):
 
     groups.pop(name, None)
     config["settings_groups"] = groups
-    with open(CONFIG_FILE, 'w') as f:
-        json.dump(normalize_config_payload(config), f, indent=4)
+    _atomic_json_write(CONFIG_FILE, normalize_config_payload(config))
 
     return {"status": "ok", "deleted": name}
 
@@ -1889,9 +1930,42 @@ async def apply_settings_group(group_name: str):
     return result
 
 
+def _get_allowed_roots() -> list[str]:
+    """Return a list of allowed root directories (home + mounted external disks)."""
+    roots = [os.path.expanduser("~")]
+    if platform.system() == "Darwin":
+        volumes_path = "/Volumes"
+        if os.path.isdir(volumes_path):
+            for entry in os.listdir(volumes_path):
+                full = os.path.join(volumes_path, entry)
+                if os.path.isdir(full):
+                    roots.append(full)
+    else:
+        for base in ("/media", "/mnt"):
+            if os.path.isdir(base):
+                for entry in os.listdir(base):
+                    full = os.path.join(base, entry)
+                    if os.path.isdir(full):
+                        roots.append(full)
+    try:
+        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+            config = json.loads(f.read())
+        for dest in config.get("destinations", []):
+            dest = os.path.abspath(dest)
+            if os.path.isdir(dest) and dest not in roots:
+                roots.append(dest)
+    except Exception:
+        pass
+    return roots
+
+
 @app.get("/api/browse")
 async def browse_host_folders(path: str = ""):
     target_path = os.path.abspath(os.path.expanduser(path)) if path else os.path.expanduser("~")
+
+    allowed_roots = _get_allowed_roots()
+    if not any(target_path == root or target_path.startswith(root + os.sep) for root in allowed_roots):
+        raise HTTPException(status_code=403, detail="Access denied: path is outside allowed directories.")
 
     if not os.path.isdir(target_path):
         raise HTTPException(status_code=400, detail="Path is not a readable directory")

@@ -4,6 +4,7 @@ import ftplib
 import json
 import os
 import shutil
+import threading
 import time
 from typing import Any
 
@@ -14,6 +15,7 @@ CONFIG_FILE = "app/backend/config.json"
 
 # Shared runtime cache for deck state snapshots exposed via /api/state.
 global_deck_state_cache: dict[str, dict[str, Any]] = {}
+_deck_state_lock = threading.Lock()
 
 _monitor_task: asyncio.Task | None = None
 _monitor_stop_event: asyncio.Event | None = None
@@ -47,7 +49,7 @@ def _transport_status_display(raw_status: str) -> str:
 def _load_runtime_config() -> dict[str, Any]:
     if os.path.exists(CONFIG_FILE):
         try:
-            with open(CONFIG_FILE, "r") as f:
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
                 return json.load(f) or {}
         except Exception:
             pass
@@ -58,7 +60,7 @@ def get_live_event_title() -> str:
     """Reads the active event configuration written by the web server."""
     if os.path.exists(ACTIVE_EVENT_FILE):
         try:
-            with open(ACTIVE_EVENT_FILE, "r") as f:
+            with open(ACTIVE_EVENT_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 return str(data.get("planned_title", "")).strip()
         except Exception:
@@ -156,12 +158,12 @@ def _dedupe_filename_for_destinations(destinations: list[str], requested_filenam
 
 
 def _get_latest_file_from_ftp_sync(host: str, slot_id: str) -> str | None:
+    ftp = None
     try:
         ftp = ftplib.FTP(host, timeout=12)
         ftp.login()
         ftp.cwd(str(slot_id))
         file_list = ftp.nlst()
-        ftp.quit()
         video_files = [f for f in file_list if f.lower().endswith((".mov", ".mp4", ".mxf"))]
         if not video_files:
             return None
@@ -169,6 +171,12 @@ def _get_latest_file_from_ftp_sync(host: str, slot_id: str) -> str | None:
         return video_files[-1]
     except Exception:
         return None
+    finally:
+        if ftp:
+            try:
+                ftp.quit()
+            except Exception:
+                pass
 
 
 def _download_and_distribute_sync(
@@ -186,6 +194,7 @@ def _download_and_distribute_sync(
     primary_path = os.path.join(primary_dest, local_filename)
     os.makedirs(os.path.dirname(primary_path), exist_ok=True)
 
+    ftp = None
     try:
         ftp = ftplib.FTP(host, timeout=30)
         ftp.login()
@@ -214,7 +223,6 @@ def _download_and_distribute_sync(
                 local_size = os.path.getsize(primary_path)
                 if remote_size is not None and local_size == remote_size:
                     _emit_progress(100)
-                    ftp.quit()
                     return True
             except Exception:
                 pass
@@ -230,7 +238,6 @@ def _download_and_distribute_sync(
         with open(primary_path, "wb") as f:
             _emit_progress(0)
             ftp.retrbinary(f"RETR {remote_filename}", _write_chunk)
-        ftp.quit()
 
         _emit_progress(100)
 
@@ -242,6 +249,12 @@ def _download_and_distribute_sync(
         return True
     except Exception:
         return False
+    finally:
+        if ftp:
+            try:
+                ftp.quit()
+            except Exception:
+                pass
 
 
 def _list_recordings_from_ftp_sync(host: str, slot_id: str) -> list[dict[str, Any]]:
@@ -275,6 +288,7 @@ def _list_recordings_from_ftp_sync(host: str, slot_id: str) -> list[dict[str, An
 
             recordings.append({"name": name, "size": size, "modified": ""})
 
+    ftp = None
     try:
         ftp = ftplib.FTP(host, timeout=15)
         ftp.login()
@@ -290,10 +304,14 @@ def _list_recordings_from_ftp_sync(host: str, slot_id: str) -> list[dict[str, An
                 _collect_from_current_dir(ftp)
             except Exception:
                 continue
-
-        ftp.quit()
     except Exception:
         return []
+    finally:
+        if ftp:
+            try:
+                ftp.quit()
+            except Exception:
+                pass
 
     recordings.sort(key=lambda item: str(item.get("name", "")).lower(), reverse=True)
     return recordings
@@ -322,7 +340,7 @@ async def transfer_recording_from_deck(
     )
 
 
-def _upload_playback_file_to_deck_sync(host: str, slot_id: str, filename: str, file_bytes: bytes) -> dict[str, Any]:
+def _upload_playback_file_to_deck_sync(host: str, slot_id: str, filename: str, file_path: str) -> dict[str, Any]:
     target_slot = str(slot_id or "1").strip() or "1"
     clean_name = os.path.basename(str(filename or "").strip())
     if not clean_name:
@@ -336,12 +354,10 @@ def _upload_playback_file_to_deck_sync(host: str, slot_id: str, filename: str, f
         except Exception:
             ftp.cwd(f"/{target_slot}")
 
-        from io import BytesIO
+        with open(file_path, "rb") as f:
+            ftp.storbinary(f"STOR {clean_name}", f)
 
-        source = BytesIO(file_bytes)
-        ftp.storbinary(f"STOR {clean_name}", source)
-
-        size = len(file_bytes)
+        size = os.path.getsize(file_path)
         try:
             size = int(ftp.size(clean_name) or size)
         except Exception:
@@ -355,8 +371,8 @@ def _upload_playback_file_to_deck_sync(host: str, slot_id: str, filename: str, f
             pass
 
 
-async def upload_playback_file_to_deck(host: str, slot_id: str, filename: str, file_bytes: bytes) -> dict[str, Any]:
-    return await asyncio.to_thread(_upload_playback_file_to_deck_sync, host, slot_id, filename, file_bytes)
+async def upload_playback_file_to_deck(host: str, slot_id: str, filename: str, file_path: str) -> dict[str, Any]:
+    return await asyncio.to_thread(_upload_playback_file_to_deck_sync, host, slot_id, filename, file_path)
 
 
 async def _trigger_transfer_for_stop(
@@ -423,13 +439,14 @@ async def _trigger_transfer_for_stop(
                 eta_seconds = int(remaining / rate)
         runtime["transfer_eta_seconds"] = eta_seconds
 
-        state = dict(global_deck_state_cache.get(host, {}))
-        state["progress"] = pct
-        state["file"] = local_filename
-        state["status"] = f"Transferring ({pct}%)"
-        state["is_transferring"] = True
-        state["transfer_eta_seconds"] = eta_seconds
-        global_deck_state_cache[host] = state
+        with _deck_state_lock:
+            state = dict(global_deck_state_cache.get(host, {}))
+            state["progress"] = pct
+            state["file"] = local_filename
+            state["status"] = f"Transferring ({pct}%)"
+            state["is_transferring"] = True
+            state["transfer_eta_seconds"] = eta_seconds
+            global_deck_state_cache[host] = state
 
     success = await asyncio.to_thread(
         _download_and_distribute_sync,
@@ -493,12 +510,12 @@ async def _poll_single_deck(deck_name: str, host: str, config: dict[str, Any]) -
             runtime["last_slot_id"] = slot_id
             status_display = transport_status_display
 
-            is_recording = raw == "record"
+            is_recording = raw.startswith("record")
             was_recording = bool(runtime.get("was_recording"))
             if is_recording and not was_recording:
                 runtime["record_started_at"] = datetime.datetime.now()
                 runtime["transfer_progress"] = 0
-            if (not is_recording) and was_recording and raw in {"stopped", "preview"}:
+            if (not is_recording) and was_recording and (raw in {"stopped", "preview"} or raw.startswith("stop")):
                 started_at = runtime.get("record_started_at") or datetime.datetime.now()
                 asyncio.create_task(_trigger_transfer_for_stop(deck_name, host, slot_id, started_at, config))
             runtime["was_recording"] = is_recording

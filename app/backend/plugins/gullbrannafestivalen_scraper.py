@@ -153,4 +153,5 @@ def fetch_schedule() -> list[dict[str, str]]:
 
 
 async def scrape() -> list[dict[str, str]]:
-    return fetch_schedule()
+    import asyncio
+    return await asyncio.to_thread(fetch_schedule)

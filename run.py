@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
+import os
 import uvicorn
 
 if __name__ == "__main__":
-    # Boots the ASGI web server directly targeting our application module wrapper
-    uvicorn.run("app.backend.server:app", host="0.0.0.0", port=8008, reload=True)
+    reload = os.environ.get("HYPERDECK_RELOAD", "true").lower() == "true"
+    host = os.environ.get("HYPERDECK_HOST", "0.0.0.0")
+    port = int(os.environ.get("HYPERDECK_PORT", "8008"))
+
+    uvicorn.run("app.backend.server:app", host=host, port=port, reload=reload)

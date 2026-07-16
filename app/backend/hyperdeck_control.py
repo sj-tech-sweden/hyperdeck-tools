@@ -25,9 +25,9 @@ async def _read_response_block(reader: asyncio.StreamReader, timeout: float) -> 
 
     # Most replies end with an empty line; some commands only return a status line.
     # Keep reading briefly for trailing fields but do not block long.
-    for _ in range(32):
+    for _ in range(500):
         try:
-            line = await asyncio.wait_for(reader.readline(), timeout=0.12)
+            line = await asyncio.wait_for(reader.readline(), timeout=0.5)
         except asyncio.TimeoutError:
             break
         if not line:
@@ -109,71 +109,6 @@ async def send_hyperdeck_command(
             pass
 
 
-async def send_hyperdeck_commands_session(
-    host: str,
-    commands: list[str],
-    port: int = HYPERDECK_PORT,
-    timeout: float = COMMAND_TIMEOUT,
-) -> list[str]:
-    """Send multiple commands over one TCP session and return ordered responses."""
-    if not commands:
-        return []
-
-    for command in commands:
-        if "\r" in command or "\n" in command:
-            raise HTTPException(
-                status_code=400,
-                detail="HyperDeck command must not contain line breaks.",
-            )
-
-    try:
-        reader, writer = await asyncio.wait_for(
-            asyncio.open_connection(str(host), port), timeout=timeout
-        )
-    except asyncio.TimeoutError:
-        raise HTTPException(
-            status_code=504,
-            detail=f"Connection timed out to HyperDeck at {host}:{port}",
-        )
-    except OSError as exc:
-        raise HTTPException(
-            status_code=503,
-            detail=f"Could not connect to HyperDeck at {host}:{port}: {exc}",
-        )
-
-    responses: list[str] = []
-    try:
-        try:
-            await _read_response_block(reader, timeout=min(timeout, 1.5))
-        except HTTPException:
-            pass
-
-        for command in commands:
-            writer.write(f"{command}\r\n".encode())
-            await writer.drain()
-            try:
-                response = await _read_response_block(reader, timeout=timeout)
-            except HTTPException as exc:
-                if exc.status_code == 504:
-                    raise HTTPException(
-                        status_code=504,
-                        detail=f"Command '{command}' timed out on HyperDeck at {host}:{port}",
-                    )
-                raise
-            responses.append(response)
-
-        return responses
-    except OSError as exc:
-        raise HTTPException(
-            status_code=503,
-            detail=f"Communication error with HyperDeck at {host}:{port}: {exc}",
-        )
-    finally:
-        try:
-            writer.close()
-            await writer.wait_closed()
-        except Exception:
-            pass
 
 
 async def send_hyperdeck_prepare_confirm(
@@ -193,7 +128,7 @@ async def send_hyperdeck_prepare_confirm(
         # Initial greeting from the deck.
         await _read_response_block(reader, timeout)
 
-        writer.write((prepare_command + "\n").encode("utf-8"))
+        writer.write((prepare_command + "\r\n").encode("utf-8"))
         await writer.drain()
         prepare_response = await _read_response_block(reader, timeout)
         prepare_parsed = parse_hyperdeck_response(prepare_response)
@@ -225,7 +160,7 @@ async def send_hyperdeck_prepare_confirm(
             }
 
         confirm_command = confirm_template.format(token=token)
-        writer.write((confirm_command + "\n").encode("utf-8"))
+        writer.write((confirm_command + "\r\n").encode("utf-8"))
         await writer.drain()
         confirm_wait = max(timeout, 60.0)
         confirm_response = await _read_response_block(reader, confirm_wait)
