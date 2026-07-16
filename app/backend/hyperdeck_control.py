@@ -5,10 +5,21 @@ the Ethernet Control Protocol (TCP port 9993).
 """
 import asyncio
 import re
+from typing import Any
 from fastapi import HTTPException
 
 HYPERDECK_PORT = 9993
 COMMAND_TIMEOUT = 5.0
+
+
+def parse_deck_host_port(deck_value: Any) -> tuple[str, int]:
+    """Parse deck config value into (host, port). Supports legacy string format (IP only) and new dict format."""
+    if isinstance(deck_value, dict):
+        host = str(deck_value.get("ip", "")).strip()
+        port = int(deck_value.get("port", HYPERDECK_PORT))
+        return host, port
+    host = str(deck_value).strip()
+    return host, HYPERDECK_PORT
 
 
 async def _read_response_block(reader: asyncio.StreamReader, timeout: float) -> str:
@@ -286,3 +297,43 @@ def build_configuration_command(settings: dict) -> list[str]:
         if value_clean:
             commands.append(f"{prefix}: {key_clean}: {value_clean}")
     return commands
+
+
+async def send_hyperdeck_commands_session(
+    host: str,
+    commands: list[str],
+    port: int = HYPERDECK_PORT,
+    timeout: float = COMMAND_TIMEOUT,
+) -> list[str]:
+    """Send multiple commands over one TCP session and return ordered responses."""
+    if not commands:
+        return []
+
+    for command in commands:
+        if "\r" in command or "\n" in command:
+            raise HTTPException(
+                status_code=400,
+                detail="HyperDeck command must not contain line breaks.",
+            )
+
+    reader, writer = await asyncio.wait_for(
+        asyncio.open_connection(str(host), port), timeout=timeout
+    )
+
+    responses: list[str] = []
+    try:
+        await _read_response_block(reader, timeout=min(timeout, 1.5))
+
+        for command in commands:
+            writer.write(f"{command}\r\n".encode())
+            await writer.drain()
+            response = await _read_response_block(reader, timeout=timeout)
+            responses.append(response)
+
+        return responses
+    finally:
+        try:
+            writer.close()
+            await writer.wait_closed()
+        except Exception:
+            pass

@@ -88,7 +88,7 @@
                     <div id="plugin-upload-panel" class="hidden rounded border border-slate-800 bg-slate-950 p-2 space-y-2">
                         <label class="text-[11px] text-slate-400 block">Upload Excel schedule (.xlsx)</label>
                         <div class="flex gap-2 items-center">
-                            <input id="plugin-file-input" type="file" accept=".xlsx" class="block w-full text-[11px] text-slate-300 file:mr-2 file:rounded file:border-0 file:bg-slate-800 file:px-2 file:py-1 file:text-slate-200">
+                            <input id="plugin-file-input" type="file" accept=".xlsx,.csv" class="block w-full text-[11px] text-slate-300 file:mr-2 file:rounded file:border-0 file:bg-slate-800 file:px-2 file:py-1 file:text-slate-200">
                             <button id="btn-plugin-upload" onclick="uploadScheduleFile()" class="text-xs bg-indigo-600/20 text-indigo-300 border border-indigo-500/30 rounded px-2.5 py-1.5 hover:bg-indigo-600 hover:text-white transition cursor-pointer">Upload</button>
                         </div>
                         <p id="plugin-upload-status" class="text-[11px] text-slate-500">No file uploaded yet.</p>
@@ -665,6 +665,19 @@
             </div>
         </div>
     </div>
+
+    <div id="toast-container" class="fixed top-4 right-4 z-50 flex flex-col gap-2 pointer-events-none"></div>
+
+    <style>
+        .toast { pointer-events: auto; max-width: 380px; padding: 12px 16px; border-radius: 8px; font-size: 13px; line-height: 1.4; box-shadow: 0 4px 12px rgba(0,0,0,.4); opacity: 0; transform: translateX(100%); transition: all .25s ease; display: flex; align-items: start; gap: 8px; }
+        .toast.show { opacity: 1; transform: translateX(0); }
+        .toast.hide { opacity: 0; transform: translateX(100%); }
+        .toast-success { background: #065f46; color: #a7f3d0; border: 1px solid #059669; }
+        .toast-error { background: #7f1d1d; color: #fca5a5; border: 1px solid #dc2626; }
+        .toast-warning { background: #78350f; color: #fde68a; border: 1px solid #d97706; }
+        .toast-info { background: #1e3a5f; color: #93c5fd; border: 1px solid #3b82f6; }
+        .schedule-row-item.drag-over { border-color: #6366f1 !important; background: rgba(99, 102, 241, 0.1) !important; }
+    </style>
 
     <script src="/app.js"></script>
 </body>

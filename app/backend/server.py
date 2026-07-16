@@ -15,9 +15,27 @@ from typing import Any, Optional
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 logger = logging.getLogger(__name__)
+
+# Command audit log - ring buffer of last 200 entries
+_command_audit_log: list[dict[str, Any]] = []
+_COMMAND_AUDIT_MAX = 200
+
+
+def log_command(command: str, host: str, deck_name: str = "", success: bool = True, detail: str = "") -> None:
+    entry = {
+        "timestamp": datetime.now().isoformat(),
+        "command": command,
+        "host": host,
+        "deck_name": deck_name or host,
+        "success": success,
+        "detail": detail,
+    }
+    _command_audit_log.append(entry)
+    if len(_command_audit_log) > _COMMAND_AUDIT_MAX:
+        _command_audit_log.pop(0)
 
 CORS_ORIGINS = [o.strip() for o in os.environ.get("HYPERDECK_CORS_ORIGINS", "*").split(",") if o.strip()]
 CORS_ALLOW_CREDENTIALS = os.environ.get("HYPERDECK_CORS_CREDENTIALS", "true").lower() == "true"
@@ -1006,23 +1024,108 @@ async def upload_plugin_source_file(plugin_name: str, file: UploadFile = File(..
 
 
 # --- HyperDeck Control & Config Routes (Brought back in) ---
+_config_cache: dict[str, Any] | None = None
+
 @app.get("/api/config")
 async def get_config():
+    global _config_cache
+    if _config_cache is not None:
+        return dict(_config_cache)
     if os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE, 'r', encoding="utf-8") as f:
-            return normalize_config_payload(json.load(f))
-    return dict(DEFAULT_CONFIG)
+            _config_cache = normalize_config_payload(json.load(f))
+            return dict(_config_cache)
+    _config_cache = dict(DEFAULT_CONFIG)
+    return dict(_config_cache)
 
 @app.post("/api/config")
 async def save_config(config: dict):
-    # Merge with existing persisted config so omitted sections (e.g. settings_groups)
-    # survive dashboard saves that only send a subset of keys.
+    global _config_cache
     existing = await get_config()
     merged = {**existing, **(config or {})}
     normalized = normalize_config_payload(merged)
+
+    warnings = []
+    for dest in normalized.get("destinations", []):
+        dest_str = str(dest).strip()
+        if not dest_str:
+            continue
+        if not os.path.exists(dest_str):
+            warnings.append(f"Path does not exist: {dest_str}")
+        elif not os.path.isdir(dest_str):
+            warnings.append(f"Path is not a directory: {dest_str}")
+        elif not os.access(dest_str, os.W_OK):
+            warnings.append(f"Path is not writable: {dest_str}")
+
     _atomic_json_write(CONFIG_FILE, normalized)
-    # Pro Tip: Trigger your background daemon to reload its configuration here if needed!
-    return {"status": "success"}
+    _config_cache = dict(normalized)
+
+    result = {"status": "success"}
+    if warnings:
+        result["warnings"] = warnings
+    return result
+
+@app.get("/api/audit-log")
+async def get_audit_log(limit: int = 50):
+    entries = list(_command_audit_log)
+    if limit > 0:
+        entries = entries[-limit:]
+    return {"entries": entries}
+
+@app.get("/api/health")
+async def health_check():
+    from app.backend.core_daemon import global_deck_state_cache, _monitor_task
+    config = await get_config()
+    decks = config.get("hyperdecks", {})
+    connected = sum(1 for v in global_deck_state_cache.values() if v.get("connected"))
+    return {
+        "status": "ok",
+        "daemon_running": _monitor_task is not None and not _monitor_task.done(),
+        "decks_configured": len(decks),
+        "decks_connected": connected,
+        "last_audit_entry": _command_audit_log[-1] if _command_audit_log else None,
+    }
+
+@app.get("/api/disk-space")
+async def get_disk_space():
+    import shutil
+    config = await get_config()
+    destinations = config.get("destinations", [])
+    results = []
+    for dest in destinations:
+        dest_str = str(dest).strip()
+        if not dest_str or not os.path.isdir(dest_str):
+            results.append({"path": dest_str, "exists": False})
+            continue
+        try:
+            usage = shutil.disk_usage(dest_str)
+            results.append({
+                "path": dest_str,
+                "exists": True,
+                "total_gb": round(usage.total / (1024**3), 1),
+                "used_gb": round(usage.used / (1024**3), 1),
+                "free_gb": round(usage.free / (1024**3), 1),
+                "percent_used": round((usage.used / usage.total) * 100, 1),
+            })
+        except Exception:
+            results.append({"path": dest_str, "exists": True, "error": "Could not read disk space"})
+    return {"destinations": results}
+
+@app.get("/api/events")
+async def sse_events():
+    from app.backend.core_daemon import global_deck_state_cache
+    import json as _json
+
+    async def event_generator():
+        last_state = {}
+        while True:
+            current_state = dict(global_deck_state_cache)
+            if current_state != last_state:
+                last_state = current_state
+                yield f"data: {_json.dumps(current_state)}\n\n"
+            await asyncio.sleep(1)
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 @app.get("/api/discover")
 async def discover_devices():
@@ -1118,6 +1221,18 @@ async def _load_all_deck_hosts() -> dict[str, str]:
     return {str(name).strip(): str(host).strip() for name, host in hyperdecks.items()}
 
 
+async def _get_deck_port(host: str) -> int:
+    """Return the TCP port for a specific host from config, defaulting to 9993."""
+    from app.backend.hyperdeck_control import HYPERDECK_PORT, parse_deck_host_port
+    config = await get_config()
+    hyperdecks = config.get("hyperdecks", {}) if isinstance(config, dict) else {}
+    for deck_value in hyperdecks.values():
+        parsed_host, parsed_port = parse_deck_host_port(deck_value)
+        if parsed_host == host:
+            return parsed_port
+    return HYPERDECK_PORT
+
+
 async def _validate_deck_host(host: str) -> None:
     """Raise 404 if *host* is not in the persisted HyperDeck config."""
     decks = await _load_all_deck_hosts()
@@ -1142,7 +1257,8 @@ async def _send_command_to_deck(deck_id: str, host: str, command: str) -> dict:
         if command == "record":
             metadata_results = await apply_scoped_slate_metadata_for_record(deck_id, host)
 
-        response = await send_hyperdeck_command(host, command)
+        port = await _get_deck_port(host)
+        response = await send_hyperdeck_command(host, command, port=port)
         parsed = parse_hyperdeck_response(response)
         success = is_hyperdeck_success_code(parsed.get("_code"))
         if success:
@@ -1281,6 +1397,7 @@ async def deck_record(host: str):
     decks = await _load_all_deck_hosts()
     deck_name = next((name for name, value in decks.items() if value == host), host)
     result = await _send_command_to_deck(deck_name, host, "record")
+    log_command("record", host, deck_name, result["success"], result.get("response", ""))
     if not result["success"]:
         status_code = result.get("status_code", 502)
         detail = result["response"] if status_code != 502 else f"HyperDeck rejected command: {result['response']}"
@@ -1295,6 +1412,7 @@ async def deck_stop(host: str):
     decks = await _load_all_deck_hosts()
     deck_name = next((name for name, value in decks.items() if value == host), host)
     result = await _send_command_to_deck(deck_name, host, "stop")
+    log_command("stop", host, deck_name, result["success"], result.get("response", ""))
     if not result["success"]:
         status_code = result.get("status_code", 502)
         detail = result["response"] if status_code != 502 else f"HyperDeck rejected command: {result['response']}"
@@ -1557,6 +1675,7 @@ async def play_deck_now(host: str, payload: dict[str, Any] | None = None):
             raise HTTPException(status_code=502, detail=f"Deck rejected cue command: {cue_response}")
 
     result = await _send_command_to_deck(deck_name, host, "play")
+    log_command("play", host, deck_name, result.get("success", False), result.get("response", ""))
     if not result.get("success"):
         status_code = result.get("status_code", 502)
         detail = result.get("response") if status_code != 502 else f"Deck rejected play command: {result.get('response')}"

@@ -46,13 +46,28 @@ def _transport_status_display(raw_status: str) -> str:
     return mapping.get(raw, raw.title() if raw else "Online")
 
 
+_config_cache: dict[str, Any] | None = None
+_config_cache_mtime: float = 0.0
+
+
 def _load_runtime_config() -> dict[str, Any]:
+    global _config_cache, _config_cache_mtime
+    try:
+        mtime = os.path.getmtime(CONFIG_FILE) if os.path.exists(CONFIG_FILE) else 0
+    except OSError:
+        mtime = 0
+    if _config_cache is not None and mtime == _config_cache_mtime:
+        return dict(_config_cache)
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                return json.load(f) or {}
+                _config_cache = json.load(f) or {}
+                _config_cache_mtime = mtime
+                return dict(_config_cache)
         except Exception:
             pass
+    _config_cache = {}
+    _config_cache_mtime = 0
     return {}
 
 
@@ -186,6 +201,7 @@ def _download_and_distribute_sync(
     local_filename: str,
     destinations: list[str],
     progress_callback=None,
+    max_retries: int = 3,
 ) -> bool:
     if not destinations:
         return False
@@ -194,67 +210,72 @@ def _download_and_distribute_sync(
     primary_path = os.path.join(primary_dest, local_filename)
     os.makedirs(os.path.dirname(primary_path), exist_ok=True)
 
-    ftp = None
-    try:
-        ftp = ftplib.FTP(host, timeout=30)
-        ftp.login()
-        ftp.cwd(str(slot_id))
-
-        remote_size: int | None = None
+    for attempt in range(max_retries):
+        ftp = None
         try:
-            remote_size = ftp.size(remote_filename)
+            ftp = ftplib.FTP(host, timeout=30)
+            ftp.login()
+            ftp.cwd(str(slot_id))
+
+            remote_size: int | None = None
+            try:
+                remote_size = ftp.size(remote_filename)
+            except Exception:
+                remote_size = None
+
+            downloaded = 0
+            started = time.monotonic()
+
+            def _emit_progress(progress_pct: int) -> None:
+                if not progress_callback:
+                    return
+                elapsed = max(0.0, time.monotonic() - started)
+                try:
+                    progress_callback(progress_pct, downloaded, remote_size or 0, elapsed)
+                except TypeError:
+                    progress_callback(progress_pct)
+
+            if os.path.exists(primary_path):
+                try:
+                    local_size = os.path.getsize(primary_path)
+                    if remote_size is not None and local_size == remote_size:
+                        _emit_progress(100)
+                        return True
+                except Exception:
+                    pass
+
+            def _write_chunk(chunk: bytes) -> None:
+                nonlocal downloaded
+                f.write(chunk)
+                downloaded += len(chunk)
+                if remote_size:
+                    pct = int((downloaded / max(remote_size, 1)) * 100)
+                    _emit_progress(max(0, min(100, pct)))
+
+            with open(primary_path, "wb") as f:
+                _emit_progress(0)
+                ftp.retrbinary(f"RETR {remote_filename}", _write_chunk)
+
+            _emit_progress(100)
+
+            for dest in destinations[1:]:
+                secondary_path = os.path.join(dest, local_filename)
+                os.makedirs(os.path.dirname(secondary_path), exist_ok=True)
+                shutil.copy2(primary_path, secondary_path)
+
+            return True
         except Exception:
-            remote_size = None
+            if attempt < max_retries - 1:
+                time.sleep(2 * (attempt + 1))
+            continue
+        finally:
+            if ftp:
+                try:
+                    ftp.quit()
+                except Exception:
+                    pass
 
-        downloaded = 0
-        started = time.monotonic()
-
-        def _emit_progress(progress_pct: int) -> None:
-            if not progress_callback:
-                return
-            elapsed = max(0.0, time.monotonic() - started)
-            try:
-                progress_callback(progress_pct, downloaded, remote_size or 0, elapsed)
-            except TypeError:
-                progress_callback(progress_pct)
-
-        if os.path.exists(primary_path):
-            try:
-                local_size = os.path.getsize(primary_path)
-                if remote_size is not None and local_size == remote_size:
-                    _emit_progress(100)
-                    return True
-            except Exception:
-                pass
-
-        def _write_chunk(chunk: bytes) -> None:
-            nonlocal downloaded
-            f.write(chunk)
-            downloaded += len(chunk)
-            if remote_size:
-                pct = int((downloaded / max(remote_size, 1)) * 100)
-                _emit_progress(max(0, min(100, pct)))
-
-        with open(primary_path, "wb") as f:
-            _emit_progress(0)
-            ftp.retrbinary(f"RETR {remote_filename}", _write_chunk)
-
-        _emit_progress(100)
-
-        for dest in destinations[1:]:
-            secondary_path = os.path.join(dest, local_filename)
-            os.makedirs(os.path.dirname(secondary_path), exist_ok=True)
-            shutil.copy2(primary_path, secondary_path)
-
-        return True
-    except Exception:
-        return False
-    finally:
-        if ftp:
-            try:
-                ftp.quit()
-            except Exception:
-                pass
+    return False
 
 
 def _list_recordings_from_ftp_sync(host: str, slot_id: str) -> list[dict[str, Any]]:
@@ -480,6 +501,17 @@ async def _trigger_transfer_for_stop(
 
 
 async def _poll_single_deck(deck_name: str, host: str, config: dict[str, Any]) -> None:
+    from app.backend.hyperdeck_control import HYPERDECK_PORT, parse_deck_host_port
+
+    # Resolve port from config
+    port = HYPERDECK_PORT
+    hyperdecks = config.get("hyperdecks", {}) if isinstance(config, dict) else {}
+    for deck_value in hyperdecks.values():
+        parsed_host, parsed_port = parse_deck_host_port(deck_value)
+        if parsed_host == host:
+            port = parsed_port
+            break
+
     runtime = _runtime_state.setdefault(host, {
         "was_recording": False,
         "record_started_at": None,
@@ -497,7 +529,7 @@ async def _poll_single_deck(deck_name: str, host: str, config: dict[str, Any]) -
     slot_id = "1"
 
     try:
-        response = await send_hyperdeck_command(host, "transport info")
+        response = await send_hyperdeck_command(host, "transport info", port=port)
         parsed = parse_hyperdeck_response(response)
         code = parsed.get("_code", 0)
         if _is_success_code(code):

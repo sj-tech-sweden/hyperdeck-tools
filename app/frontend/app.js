@@ -8,6 +8,17 @@ let scheduleDataCache = [];
 let currentPluginSelection = '';
 const PLUGIN_SELECTION_STORAGE_KEY = 'hyperdeck.schedulePluginSelection';
 let scheduleSaveDebounceTimer = null;
+
+function showToast(message, type = 'info', durationMs = 4000) {
+    const container = document.getElementById('toast-container');
+    if (!container) return;
+    const toast = document.createElement('div');
+    toast.className = `toast toast-${type}`;
+    toast.innerHTML = `<span class="flex-1">${escHtml(message)}</span><button onclick="this.parentElement.remove()" class="text-current opacity-50 hover:opacity-100 cursor-pointer">&times;</button>`;
+    container.appendChild(toast);
+    requestAnimationFrame(() => toast.classList.add('show'));
+    if (durationMs > 0) setTimeout(() => { toast.classList.remove('show'); toast.classList.add('hide'); setTimeout(() => toast.remove(), 300); }, durationMs);
+}
 let scheduleTempRowCounter = 0;
 let deckSettingsLastFocusedElement = null;
 let settingsGroupsOptionSuggestionsCache = {};
@@ -565,7 +576,7 @@ function insertSlateGlobalTemplate() {
 
 function insertSlatePerDeckTemplate() {
     // Kept for backwards compatibility with existing button bindings if any remain.
-    alert('Per-deck slate metadata is configured in each Deck Settings panel.');
+    showToast('Per-deck slate metadata is configured in each Deck Settings panel.', 'info');
 }
 
 function updateStageModeUI() {
@@ -784,18 +795,26 @@ function renderConfigDecksList() {
     const list = document.getElementById('cfg-decks-list');
     list.innerHTML = '';
     const deckStages = localConfigCache.deck_stages || {};
-    for (const [name, ip] of Object.entries(localConfigCache.hyperdecks)) {
-        list.appendChild(createDeckRowElement(name, ip, deckStages[name] || ''));
+    for (const [name, value] of Object.entries(localConfigCache.hyperdecks)) {
+        let ip = '', port = '9993';
+        if (typeof value === 'object' && value !== null) {
+            ip = value.ip || '';
+            port = String(value.port || '9993');
+        } else {
+            ip = String(value || '');
+        }
+        list.appendChild(createDeckRowElement(name, ip, deckStages[name] || '', port));
     }
 }
 
-function createDeckRowElement(name='', ip='', stage='') {
+function createDeckRowElement(name='', ip='', stage='', port='9993') {
     const div = document.createElement('div');
     div.className = 'flex gap-2 items-center row-deck-item';
     div.innerHTML = `
-        <input type="text" placeholder="Device Label" value="${escHtml(name)}" class="d-name block w-1/3 rounded-md border-0 bg-slate-950 px-2 py-1 text-xs text-white ring-1 ring-inset ring-slate-800 focus:outline-none">
-        <input type="text" placeholder="IP / Hostname" value="${escHtml(ip)}" class="d-ip block w-1/3 rounded-md border-0 bg-slate-950 px-2 py-1 text-xs text-white ring-1 ring-inset ring-slate-800 focus:outline-none">
-        <input type="text" list="cfg-stage-options" placeholder="Stage" value="${escHtml(stage)}" class="d-stage block w-1/3 rounded-md border-0 bg-slate-950 px-2 py-1 text-xs text-white ring-1 ring-inset ring-slate-800 focus:outline-none">
+        <input type="text" placeholder="Device Label" value="${escHtml(name)}" class="d-name block w-1/4 rounded-md border-0 bg-slate-950 px-2 py-1 text-xs text-white ring-1 ring-inset ring-slate-800 focus:outline-none">
+        <input type="text" placeholder="IP / Hostname" value="${escHtml(ip)}" class="d-ip block w-1/4 rounded-md border-0 bg-slate-950 px-2 py-1 text-xs text-white ring-1 ring-inset ring-slate-800 focus:outline-none">
+        <input type="number" placeholder="Port" value="${escHtml(port)}" class="d-port block w-1/6 rounded-md border-0 bg-slate-950 px-2 py-1 text-xs text-white ring-1 ring-inset ring-slate-800 focus:outline-none">
+        <input type="text" list="cfg-stage-options" placeholder="Stage" value="${escHtml(stage)}" class="d-stage block w-1/4 rounded-md border-0 bg-slate-950 px-2 py-1 text-xs text-white ring-1 ring-inset ring-slate-800 focus:outline-none">
         <button onclick="this.parentElement.remove()" class="text-rose-500 text-xs px-1 hover:text-rose-400 cursor-pointer">✕</button>
     `;
     return div;
@@ -828,9 +847,14 @@ async function saveConfigToServer() {
     document.querySelectorAll('.row-deck-item').forEach(el => {
         const name = el.querySelector('.d-name').value.trim();
         const ip = el.querySelector('.d-ip').value.trim();
+        const port = parseInt(el.querySelector('.d-port').value.trim() || '9993', 10);
         const stage = el.querySelector('.d-stage').value.trim();
         if(name && ip) {
-            hyperdecks[name] = ip;
+            if (port && port !== 9993) {
+                hyperdecks[name] = { ip, port };
+            } else {
+                hyperdecks[name] = ip;
+            }
             if (stage) deck_stages[name] = stage;
         }
     });
@@ -857,11 +881,17 @@ async function saveConfigToServer() {
             body: JSON.stringify(payload)
         });
         if(res.ok) {
-            alert('Configuration updated and reloaded cleanly!');
+            const data = await res.json().catch(() => ({}));
+            const warnings = data.warnings || [];
+            if (warnings.length > 0) {
+                showToast(`Saved with warnings: ${warnings.join('; ')}`, 'warning', 6000);
+            } else {
+                showToast('Configuration updated and reloaded cleanly!', 'success');
+            }
             if (slateStatus) slateStatus.innerText = 'Slate metadata saved.';
             pullConfigurationMatrix();
         }
-    } catch (e) { alert("Error trying to commit target configurations modifications."); }
+    } catch (e) { showToast("Error trying to commit target configurations modifications.", 'error'); }
 }
 
 async function triggerDiscovery() {
@@ -1058,9 +1088,11 @@ function createScheduleRowElement(item = { id: '', planned_title: '' }) {
     const isActive = item.id && item.id === globallyActiveEventId;
     div.className = `schedule-row-item rounded border px-2.5 py-2.5 ${isActive ? 'border-indigo-500/60 bg-indigo-500/10' : 'border-slate-800 bg-slate-900'}`;
     div.dataset.rowKey = rowKey;
+    div.draggable = true;
     div.innerHTML = `
         <div class="grid grid-cols-12 gap-2 items-end">
-            <label class="col-span-4 text-[10px] text-slate-400 space-y-1">
+            <div class="col-span-1 flex items-center justify-center cursor-grab active:cursor-grabbing text-slate-600 hover:text-slate-400 drag-handle" title="Drag to reorder">⠿</div>
+            <label class="col-span-3 text-[10px] text-slate-400 space-y-1">
                 <span class="block">Event ID ${hintBadge('Optional. Auto-generated on save if blank.')}</span>
                 <input type="text" title="Optional. Auto-generated on save if blank." placeholder="event_001" value="${item.id || ''}" class="sch-id block w-full rounded border border-slate-800 bg-slate-950 px-2 py-1 text-[11px] text-slate-200 focus:outline-none">
             </label>
@@ -1287,7 +1319,7 @@ async function selectActiveFromRow(buttonEl) {
     const time = row.querySelector('.sch-time')?.value || '';
     const startTime = date && time ? `${date} ${time}` : '';
     if (!id && !startTime) {
-        alert('Please set an event ID before selecting active context.');
+        showToast('Please set an event ID before selecting active context.', 'warning');
         return;
     }
 
@@ -1302,7 +1334,7 @@ async function triggerPluginSync() {
     const syncButton = document.getElementById('btn-plugin-sync');
 
     if (!plugin) {
-        alert('Select a schedule plugin first.');
+        showToast('Select a schedule plugin first.', 'warning');
         return;
     }
 
@@ -1320,7 +1352,7 @@ async function triggerPluginSync() {
         const res = await fetch(`/api/plugins/run/${encodeURIComponent(plugin)}`, { method: 'POST' });
         const data = await res.json();
         if (!res.ok) {
-            alert(data.detail || 'Plugin sync failed.');
+            showToast(data.detail || 'Plugin sync failed.', 'error');
             syncStatus.innerText = `Sync failed: ${data.detail || 'Unknown plugin error'}`;
             return;
         }
@@ -1332,7 +1364,7 @@ async function triggerPluginSync() {
         const count = Array.isArray(schedule) ? schedule.length : 0;
         syncStatus.innerText = `Last sync: ${count} rows loaded from ${plugin}`;
     } catch (e) {
-        alert('Plugin sync request failed.');
+        showToast('Plugin sync request failed.', 'error');
         syncStatus.innerText = 'Sync failed: Could not reach server plugin endpoint.';
     } finally {
         syncButton.disabled = false;
@@ -1348,13 +1380,13 @@ async function uploadScheduleFile() {
     const uploadButton = document.getElementById('btn-plugin-upload');
 
     if (!plugin) {
-        alert('Select a plugin first.');
+        showToast('Select a plugin first.', 'warning');
         return;
     }
 
     const file = fileInput.files && fileInput.files[0];
     if (!file) {
-        alert('Choose an .xlsx file first.');
+        showToast('Choose an .xlsx file first.', 'warning');
         return;
     }
 
@@ -1450,13 +1482,13 @@ async function sendDeckCommand(host, command) {
         let data;
         try { data = await res.json(); } catch (_) { data = {}; }
         if (!res.ok) {
-            alert(`Command failed on ${host}: ${data.detail || 'Unknown error'}`);
+            showToast(`Command failed on ${host}: ${data.detail || 'Unknown error'}`, 'error');
         } else {
             console.info(`${label} on ${host}:`, data.response);
             updateDashboardMetrics();
         }
     } catch (e) {
-        alert(`Could not reach backend API for ${host}.`);
+        showToast(`Could not reach backend API for ${host}.`, 'error');
     }
 }
 
@@ -1477,17 +1509,17 @@ async function sendCommandToAll(command) {
         let data;
         try { data = await res.json(); } catch (_) { data = {}; }
         if (!res.ok) {
-            alert(`${label} failed: ${data.detail || 'Unknown error'}`);
+            showToast(`${label} failed: ${data.detail || 'Unknown error'}`, 'error');
             return;
         }
         const results = data.results || [];
         const failed = results.filter(r => !r.success);
         if (failed.length > 0) {
             const names = failed.map(r => r.name || r.host).join(', ');
-            alert(`${label}: command failed on ${failed.length} deck(s): ${names}`);
+            showToast(`${label}: command failed on ${failed.length} deck(s): ${names}`, 'error');
         }
     } catch (e) {
-        alert(`${label}: could not reach server.`);
+        showToast(`${label}: could not reach server.`, 'error');
     } finally {
         if (btn) {
             btn.disabled = false;
@@ -2793,12 +2825,12 @@ async function playDeckNowFromCard(host) {
         let data;
         try { data = await res.json(); } catch (_) { data = {}; }
         if (!res.ok) {
-            alert(`Play failed on ${host}: ${data.detail || 'Unknown error'}`);
+            showToast(`Play failed on ${host}: ${data.detail || 'Unknown error'}`, 'error');
             return;
         }
         updateDashboardMetrics();
     } catch (_) {
-        alert(`Play failed on ${host}: Could not reach backend API.`);
+        showToast(`Play failed on ${host}: Could not reach backend API.`, 'error');
     }
 }
 
@@ -3478,6 +3510,24 @@ async function loadPluginManagerSystem() {
 // Application execution setups
 pullConfigurationMatrix();
 let _dashboardPollInterval = null;
+let _eventSource = null;
+
+function _startSSE() {
+    if (_eventSource) return;
+    _eventSource = new EventSource('/api/events');
+    _eventSource.onmessage = (event) => {
+        try {
+            const state = JSON.parse(event.data);
+            _updateDashboardFromState(state);
+        } catch (_) {}
+    };
+    _eventSource.onerror = () => {
+        _eventSource.close();
+        _eventSource = null;
+        _startDashboardPolling();
+    };
+}
+
 function _startDashboardPolling() {
     if (_dashboardPollInterval) return;
     _dashboardPollInterval = setInterval(updateDashboardMetrics, 2000);
@@ -3486,8 +3536,73 @@ function _stopDashboardPolling() {
     if (_dashboardPollInterval) { clearInterval(_dashboardPollInterval); _dashboardPollInterval = null; }
 }
 document.addEventListener('visibilitychange', () => {
-    if (document.hidden) { _stopDashboardPolling(); } else { _startDashboardPolling(); updateDashboardMetrics(); }
+    if (document.hidden) { _stopDashboardPolling(); if (_eventSource) { _eventSource.close(); _eventSource = null; } }
+    else { if (navigator.onLine) _startSSE(); else _startDashboardPolling(); updateDashboardMetrics(); }
 });
-_startDashboardPolling();
+_startSSE();
 updateDashboardMetrics();
 loadPluginManagerSystem();
+
+// --- Keyboard Shortcuts ---
+document.addEventListener('keydown', (e) => {
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
+    if ((e.ctrlKey || e.metaKey) && e.key === 'r') { e.preventDefault(); sendCommandToAll('record'); }
+    else if ((e.ctrlKey || e.metaKey) && e.key === '.') { e.preventDefault(); sendCommandToAll('stop'); }
+    else if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); saveScheduleFromMatrix(); }
+    else if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'S') { e.preventDefault(); saveConfigToServer(); }
+});
+
+// --- Schedule Drag and Drop ---
+let _draggedRow = null;
+let _draggedRowKey = null;
+
+document.addEventListener('dragstart', (e) => {
+    const row = e.target.closest('.schedule-row-item');
+    if (!row) return;
+    _draggedRow = row;
+    _draggedRowKey = row.dataset.rowKey;
+    row.style.opacity = '0.4';
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', row.dataset.rowKey);
+});
+
+document.addEventListener('dragend', (e) => {
+    const row = e.target.closest('.schedule-row-item');
+    if (row) row.style.opacity = '';
+    document.querySelectorAll('.schedule-row-item.drag-over').forEach(el => el.classList.remove('drag-over'));
+    _draggedRow = null;
+    _draggedRowKey = null;
+});
+
+document.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const row = e.target.closest('.schedule-row-item');
+    if (row && row !== _draggedRow) {
+        document.querySelectorAll('.schedule-row-item.drag-over').forEach(el => el.classList.remove('drag-over'));
+        row.classList.add('drag-over');
+    }
+});
+
+document.addEventListener('dragleave', (e) => {
+    const row = e.target.closest('.schedule-row-item');
+    if (row) row.classList.remove('drag-over');
+});
+
+document.addEventListener('drop', (e) => {
+    e.preventDefault();
+    const targetRow = e.target.closest('.schedule-row-item');
+    if (!targetRow || !_draggedRow || targetRow === _draggedRow) return;
+    targetRow.classList.remove('drag-over');
+
+    const sourceKey = _draggedRowKey;
+    const targetKey = targetRow.dataset.rowKey;
+    const sourceIdx = scheduleDataCache.findIndex(item => (item._row_key || scheduleItemKey(item)) === decodeURIComponent(sourceKey));
+    const targetIdx = scheduleDataCache.findIndex(item => (item._row_key || scheduleItemKey(item)) === decodeURIComponent(targetKey));
+    if (sourceIdx === -1 || targetIdx === -1) return;
+
+    const [moved] = scheduleDataCache.splice(sourceIdx, 1);
+    scheduleDataCache.splice(targetIdx, 0, moved);
+    renderScheduleMatrix(scheduleDataCache, true);
+    saveScheduleFromMatrix();
+});
