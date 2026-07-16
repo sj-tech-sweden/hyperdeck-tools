@@ -41,6 +41,26 @@ python run.py
 Open:
 - `http://localhost:8008`
 
+## Update
+
+Run the update script to pull the latest changes and install updated dependencies:
+
+```bash
+./update.sh
+```
+
+This will:
+- Stash any local changes before updating
+- Pull the latest from the repository
+- Install/update Python requirements
+- Restore your stashed changes
+
+Restart the service after updating if running as a systemd service:
+
+```bash
+sudo systemctl restart hyperdeck-tools
+```
+
 ## Run as a systemd Service (Linux)
 
 Create a service file:

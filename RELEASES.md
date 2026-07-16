@@ -63,6 +63,7 @@ First stable release of HyperDeck Tools — a web-based control panel for multi-
 
 **Deployment**
 - systemd service support on Linux (documented in README)
+- `update.sh` — one-command update script that pulls latest code and refreshes dependencies
 
 ### Tech Stack
 
