@@ -2060,12 +2060,23 @@ def _get_allowed_roots() -> list[str]:
                 if os.path.isdir(full):
                     roots.append(full)
     else:
-        for base in ("/media", "/mnt"):
-            if os.path.isdir(base):
-                for entry in os.listdir(base):
-                    full = os.path.join(base, entry)
-                    if os.path.isdir(full):
-                        roots.append(full)
+        # Ubuntu/Debian: /media/<user>/* , Fedora/RHEL/Arch: /run/media/<user>/*
+        for base in ("/media", "/mnt", "/run/media"):
+            if not os.path.isdir(base):
+                continue
+            for entry in os.listdir(base):
+                full = os.path.join(base, entry)
+                if not os.path.isdir(full):
+                    continue
+                roots.append(full)
+                # One level deeper: /media/<user>/<disk>, /run/media/<user>/<disk>
+                try:
+                    for sub in os.listdir(full):
+                        sub_full = os.path.join(full, sub)
+                        if os.path.isdir(sub_full):
+                            roots.append(sub_full)
+                except OSError:
+                    pass
     try:
         with open(CONFIG_FILE, "r", encoding="utf-8") as f:
             config = json.loads(f.read())
@@ -2077,6 +2088,10 @@ def _get_allowed_roots() -> list[str]:
         pass
     return roots
 
+
+@app.get("/api/browse/roots")
+async def get_browse_roots():
+    return {"roots": _get_allowed_roots()}
 
 @app.get("/api/browse")
 async def browse_host_folders(path: str = ""):

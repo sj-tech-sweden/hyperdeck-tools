@@ -1004,8 +1004,26 @@ async function navigateFolder(targetPath = "") {
 function openFolderBrowser(inputEl) {
     activeDestinationInput = inputEl;
     document.getElementById('folder-modal').classList.remove('hidden');
-    // Seed window with value if it exists, otherwise fall back to system roots
+    renderQuickAccessSidebar();
     navigateFolder(inputEl && inputEl.value ? inputEl.value : "");
+}
+
+function renderQuickAccessSidebar() {
+    const list = document.getElementById('modal-quick-access');
+    if (!list) return;
+    list.innerHTML = '<li class="text-slate-500 text-[10px] px-2 py-1">Loading...</li>';
+    fetch('/api/browse/roots').then(r => r.json()).then(data => {
+        list.innerHTML = '';
+        const roots = data.roots || [];
+        roots.forEach(root => {
+            const label = root === '' ? '~ Home' : root;
+            const li = document.createElement('li');
+            li.innerHTML = `<button onclick="navigateFolder('${escHtml(root.replace(/\\/g, '\\\\'))}')" class="w-full text-left px-2 py-1.5 rounded hover:bg-slate-800 text-slate-400 hover:text-white cursor-pointer truncate" title="${escHtml(root)}">${escHtml(label)}</button>`;
+            list.appendChild(li);
+        });
+    }).catch(() => {
+        list.innerHTML = '<li class="text-slate-500 text-[10px] px-2 py-1">Failed to load</li>';
+    });
 }
 
 function closeFolderBrowser() {

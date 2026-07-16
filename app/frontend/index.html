@@ -639,24 +639,35 @@
 
     <!-- Host Filesystem Directory Browser Modal Component -->
     <div id="folder-modal" class="hidden fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-        <div class="bg-slate-900 border border-slate-800 rounded-lg max-w-2xl w-full p-6 flex flex-col max-h-[80vh] shadow-2xl">
+        <div class="bg-slate-900 border border-slate-800 rounded-lg max-w-3xl w-full p-6 flex flex-col max-h-[80vh] shadow-2xl">
             <div class="flex items-center justify-between border-b border-slate-800 pb-4 mb-4">
                 <h3 class="text-lg font-semibold text-white">Select Destination Folder</h3>
                 <button onclick="closeFolderBrowser()" class="text-slate-400 hover:text-white cursor-pointer text-xl">✕</button>
             </div>
             
-            <!-- Current Traversal Breadcrumb Header -->
-            <div class="flex gap-2 items-center mb-4">
-                <button onclick="navigateFolder(document.getElementById('modal-parent-path').value)" id="btn-folder-up" class="px-2.5 py-1 text-xs bg-slate-800 hover:bg-slate-700 rounded font-bold cursor-pointer">⬆ Up</button>
-                <input type="text" id="modal-current-path" readonly class="block w-full rounded bg-slate-950 border border-slate-800 px-3 py-1 text-xs font-mono text-slate-300 focus:outline-none">
-                <input type="hidden" id="modal-parent-path">
-            </div>
+            <div class="flex gap-4 flex-1 min-h-0">
+                <!-- Quick Access Sidebar -->
+                <div class="w-40 shrink-0 bg-slate-950 rounded border border-slate-800 p-2 overflow-y-auto">
+                    <div class="text-[10px] text-slate-500 uppercase tracking-wider mb-2 px-2">Quick Access</div>
+                    <ul id="modal-quick-access" class="space-y-0.5 text-xs font-mono"></ul>
+                </div>
 
-            <!-- Scrollable Directories Box -->
-            <div class="flex-1 overflow-y-auto bg-slate-950 rounded border border-slate-800 p-2 min-h-[250px]">
-                <ul id="modal-folder-list" class="divide-y divide-slate-900 text-sm font-mono">
-                    <!-- Folders fetched recursively are injected here -->
-                </ul>
+                <!-- Main Browser -->
+                <div class="flex-1 flex flex-col min-w-0">
+                    <!-- Current Traversal Breadcrumb Header -->
+                    <div class="flex gap-2 items-center mb-4">
+                        <button onclick="navigateFolder(document.getElementById('modal-parent-path').value)" id="btn-folder-up" class="px-2.5 py-1 text-xs bg-slate-800 hover:bg-slate-700 rounded font-bold cursor-pointer">⬆ Up</button>
+                        <input type="text" id="modal-current-path" readonly class="block w-full rounded bg-slate-950 border border-slate-800 px-3 py-1 text-xs font-mono text-slate-300 focus:outline-none">
+                        <input type="hidden" id="modal-parent-path">
+                    </div>
+
+                    <!-- Scrollable Directories Box -->
+                    <div class="flex-1 overflow-y-auto bg-slate-950 rounded border border-slate-800 p-2 min-h-[250px]">
+                        <ul id="modal-folder-list" class="divide-y divide-slate-900 text-sm font-mono">
+                            <!-- Folders fetched recursively are injected here -->
+                        </ul>
+                    </div>
+                </div>
             </div>
 
             <div class="flex justify-end gap-3 border-t border-slate-800 pt-4 mt-4">
