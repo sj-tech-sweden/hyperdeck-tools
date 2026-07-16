@@ -41,6 +41,33 @@ python run.py
 Open:
 - `http://localhost:8008`
 
+## Environment Variables
+
+All configuration is optional. Defaults are suitable for local development.
+
+| Variable | Default | Description |
+|---|---|---|
+| `HYPERDECK_HOST` | `0.0.0.0` | Bind address for the web server |
+| `HYPERDECK_PORT` | `8008` | Port for the web server |
+| `HYPERDECK_RELOAD` | `false` | Auto-reload on code changes (set to `true` during development) |
+| `HYPERDECK_CORS_ORIGINS` | `*` | Comma-separated list of allowed CORS origins (restrict in production) |
+| `HYPERDECK_CORS_CREDENTIALS` | `true` | Allow CORS credentials (cookies, auth headers) |
+
+### Example: development with auto-reload
+
+```bash
+HYPERDECK_RELOAD=true python run.py
+```
+
+### Example: production override
+
+```bash
+HYPERDECK_HOST=127.0.0.1 \
+HYPERDECK_PORT=8008 \
+HYPERDECK_CORS_ORIGINS=https://myhost.example.com \
+python run.py
+```
+
 ## Update
 
 Run the update script to pull the latest changes and install updated dependencies:
