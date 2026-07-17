@@ -1,6 +1,7 @@
 # HyperDeck Tools
 
 A FastAPI + frontend control panel for multi-HyperDeck workflows with:
+
 - deck monitoring and discovery
 - config management (destinations, naming template, stages)
 - schedule sync via plugins
@@ -39,6 +40,7 @@ python run.py
 ```
 
 Open:
+
 - `http://localhost:8008`
 
 ## Environment Variables
@@ -77,6 +79,7 @@ Run the update script to pull the latest changes and install updated dependencie
 ```
 
 This will:
+
 - Stash any local changes before updating
 - Pull the latest from the repository
 - Install/update Python requirements
@@ -142,24 +145,27 @@ Plugin name: `excel_schedule_uploader`
 Use the upload panel in **Active Metadata Schedule** when this plugin is selected.
 
 Bundled sample workbook:
+
 - [templates/schedule_template.xlsx](/Users/samueljorblad/Documents/scripts/hyperdeck-tools/templates/schedule_template.xlsx)
 
 ### Supported Excel format (.xlsx)
 
 First row should contain headers. Recommended headers:
+
 - `start_time` (example: `2026-07-15 19:30`)
 - `planned_title`
 - `stage`
 - `id` (optional)
 
 Also supported as alternatives:
+
 - `title` or `event` instead of `planned_title`
 - `date` + `time` instead of `start_time`
 - `venue` instead of `stage`
 
 ### Example rows
 
-| start_time        | planned_title    | stage       | id |
+| start_time       | planned_title    | stage       | id |
 |------------------|------------------|-------------|----|
 | 2026-07-15 19:30 | Evening_Service  | Main Stage  |    |
 | 2026-07-15 21:00 | Concert          | Youth Stage |    |
@@ -167,11 +173,13 @@ Also supported as alternatives:
 If `id` is missing, one is generated automatically.
 
 If you want a starting point, duplicate and edit the bundled template workbook:
+
 - [templates/schedule_template.xlsx](/Users/samueljorblad/Documents/scripts/hyperdeck-tools/templates/schedule_template.xlsx)
 
 ## Auto Event Selection
 
 In Service Operations:
+
 - `Automatic Event Selection`:
   - `Enabled`: active event is auto-selected from nearest in-scope event
   - `Disabled`: use manual Set Active
@@ -180,6 +188,7 @@ In Service Operations:
 ## Tokens
 
 Naming template supports tokens including:
+
 - `{deck_name}`
 - `{stage}`
 - `{slot_id}`
