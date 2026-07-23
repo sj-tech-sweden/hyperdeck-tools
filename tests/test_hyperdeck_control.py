@@ -1,12 +1,12 @@
 import pytest
+from fastapi import HTTPException
+
 from app.backend.hyperdeck_control import (
+    HYPERDECK_PORT,
     build_configuration_command,
     parse_deck_host_port,
     parse_hyperdeck_response,
-    HYPERDECK_PORT,
 )
-from fastapi import HTTPException
-
 
 # ---------------------------------------------------------------------------
 # parse_hyperdeck_response

@@ -6,6 +6,7 @@ the Ethernet Control Protocol (TCP port 9993).
 import asyncio
 import re
 from typing import Any
+
 from fastapi import HTTPException
 
 HYPERDECK_PORT = 9993

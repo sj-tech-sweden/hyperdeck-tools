@@ -1,14 +1,10 @@
-import os
-import tempfile
 
-import pytest
 from app.backend.plugins.csv_schedule_uploader import _build_start_time as csv_build_start_time
 from app.backend.plugins.csv_schedule_uploader import _norm_header as csv_norm_header
 from app.backend.plugins.csv_schedule_uploader import scrape as csv_scrape
 from app.backend.plugins.excel_schedule_uploader import _build_start_time as excel_build_start_time
 from app.backend.plugins.excel_schedule_uploader import _format_datetime
 from app.backend.plugins.excel_schedule_uploader import _norm_header as excel_norm_header
-
 
 # ---------------------------------------------------------------------------
 # CSV plugin helpers
@@ -55,7 +51,9 @@ class TestCsvBuildStartTime:
 class TestCsvScrape:
     def test_valid_csv(self, tmp_path):
         csv_file = tmp_path / "test.csv"
-        csv_file.write_text("start_time,planned_title,stage\n2026-07-15 19:30,Evening Service,Main Stage\n", encoding="utf-8")
+        content = "start_time,planned_title,stage\n"
+        content += "2026-07-15 19:30,Evening Service,Main Stage\n"
+        csv_file.write_text(content, encoding="utf-8")
         result = csv_scrape(str(csv_file))
         assert len(result) == 1
         assert result[0]["planned_title"] == "Evening Service"
@@ -126,7 +124,7 @@ class TestExcelBuildStartTime:
         assert excel_build_start_time({"start_time": datetime(2026, 7, 15, 19, 30)}) == "2026-07-15 19:30"
 
     def test_split_date_time(self):
-        from datetime import datetime, date, time
+        from datetime import date, time
         result = excel_build_start_time({"date": date(2026, 7, 15), "time": time(19, 30)})
         assert result == "2026-07-15 19:30"
 

@@ -1,7 +1,5 @@
 import datetime
-import os
 
-import pytest
 from app.backend.core_daemon import (
     _dedupe_filename_for_destinations,
     _is_success_code,
@@ -9,7 +7,6 @@ from app.backend.core_daemon import (
     generate_target_filename,
     get_weekday_sv3,
 )
-
 
 # ---------------------------------------------------------------------------
 # _is_success_code
