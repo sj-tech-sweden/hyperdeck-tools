@@ -1,6 +1,7 @@
 import asyncio
-import socket
 import ipaddress
+import socket
+
 import psutil
 
 

@@ -1,21 +1,22 @@
 # app/backend/server.py
-import os
-import json
-import importlib.util
-import inspect
 import ast
 import asyncio
+import importlib.util
+import inspect
+import json
 import logging
+import os
 import platform
 import re
 import tempfile
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any, Optional
-from fastapi import FastAPI, HTTPException, UploadFile, File
+
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +88,7 @@ DEFAULT_CONFIG = {
 def _atomic_json_write(file_path: str, data: Any) -> None:
     """Write JSON data atomically using a temp file + rename."""
     dir_name = os.path.dirname(file_path) or "."
+    os.makedirs(dir_name, exist_ok=True)
     fd, tmp_path = tempfile.mkstemp(dir=dir_name, suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -319,7 +321,7 @@ def _collect_options_from_text(raw_text: str, options: dict[str, list[str]], key
 
 
 async def discover_deck_setting_options(host: str, settings: dict[str, str]) -> tuple[dict[str, list[str]], str]:
-    from app.backend.hyperdeck_control import send_hyperdeck_command, parse_hyperdeck_response
+    from app.backend.hyperdeck_control import parse_hyperdeck_response, send_hyperdeck_command
 
     # Strict device-driven mode: no default fallback lists.
     options: dict[str, list[str]] = {k: [] for k in DECK_SETTING_KEYS}
@@ -454,7 +456,7 @@ def _deck_option_probe_commands() -> list[str]:
 
 
 async def discover_deck_slots(host: str) -> list[str]:
-    from app.backend.hyperdeck_control import send_hyperdeck_command, parse_hyperdeck_response
+    from app.backend.hyperdeck_control import parse_hyperdeck_response, send_hyperdeck_command
 
     discovered: list[str] = []
     seen: set[str] = set()
@@ -503,7 +505,10 @@ async def discover_deck_slots(host: str) -> list[str]:
 
 
 async def run_deck_option_probes(host: str) -> list[dict[str, Any]]:
-    from app.backend.hyperdeck_control import send_hyperdeck_command, parse_hyperdeck_response, send_hyperdeck_commands_session
+    from app.backend.hyperdeck_control import (
+        parse_hyperdeck_response,
+        send_hyperdeck_command,
+    )
 
     results: list[dict[str, Any]] = []
     for command in _deck_option_probe_commands():
@@ -553,7 +558,7 @@ async def set_active_metadata_context(event: dict):
     # If the title is missing or explicitly reset, save the default fallback state
     title = event.get("planned_title", "").strip()
     event_id = event.get("id", "default").strip() or "default"
-    
+
     context = {
         "id": event_id if title else "default",
         "planned_title": title,
@@ -693,7 +698,10 @@ def normalize_config_payload(config: dict[str, Any]) -> dict[str, Any]:
             if not name or not isinstance(raw_payload, dict):
                 continue
             targets_raw = raw_payload.get("targets")
-            targets = [str(t).strip() for t in (targets_raw or []) if str(t).strip()] if isinstance(targets_raw, list) else []
+            if isinstance(targets_raw, list):
+                targets = [str(t).strip() for t in targets_raw if str(t).strip()]
+            else:
+                targets = []
             settings_raw = raw_payload.get("settings")
             settings = settings_raw if isinstance(settings_raw, dict) else {}
             field_keys_raw = raw_payload.get("field_keys")
@@ -847,7 +855,9 @@ def resolve_deck_stage(config: dict[str, Any], deck_name: str) -> str:
         return str(config.get("deck_stages", {}).get(deck_name, "")).strip()
     return str(config.get("global_stage", "")).strip()
 
-def build_deck_schedule_resolution(config: dict[str, Any], deck_name: str, schedule: list[dict[str, Any]]) -> dict[str, Any]:
+def build_deck_schedule_resolution(
+    config: dict[str, Any], deck_name: str, schedule: list[dict[str, Any]]
+) -> dict[str, Any]:
     now = datetime.now()
     drift_minutes = int(config.get("schedule_max_drift_minutes", 45))
     deck_stage = resolve_deck_stage(config, deck_name)
@@ -1074,7 +1084,7 @@ async def get_audit_log(limit: int = 50):
 
 @app.get("/api/health")
 async def health_check():
-    from app.backend.core_daemon import global_deck_state_cache, _monitor_task
+    from app.backend.core_daemon import _monitor_task, global_deck_state_cache
     config = await get_config()
     decks = config.get("hyperdecks", {})
     connected = sum(1 for v in global_deck_state_cache.values() if v.get("connected"))
@@ -1113,8 +1123,9 @@ async def get_disk_space():
 
 @app.get("/api/events")
 async def sse_events():
-    from app.backend.core_daemon import global_deck_state_cache
     import json as _json
+
+    from app.backend.core_daemon import global_deck_state_cache
 
     async def event_generator():
         last_state = {}
@@ -1125,7 +1136,8 @@ async def sse_events():
                 yield f"data: {_json.dumps(current_state)}\n\n"
             await asyncio.sleep(1)
 
-    return StreamingResponse(event_generator(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+    headers = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+    return StreamingResponse(event_generator(), media_type="text/event-stream", headers=headers)
 
 @app.get("/api/discover")
 async def discover_devices():
@@ -1177,7 +1189,11 @@ async def get_deck_states():
         return enriched
 
     hosts_to_check = [str(host) for host in hyperdecks.values()]
-    online_checks = await asyncio.gather(*(is_hyperdeck_online(host) for host in hosts_to_check)) if hosts_to_check else []
+    online_checks = []
+    if hosts_to_check:
+        online_checks = await asyncio.gather(
+            *(is_hyperdeck_online(host) for host in hosts_to_check)
+        )
     online_by_host = {host: online for host, online in zip(hosts_to_check, online_checks)}
 
     fallback_state = {}
@@ -1250,8 +1266,8 @@ async def _send_command_to_deck(deck_id: str, host: str, command: str) -> dict:
     *deck_id* is an arbitrary label used in the result (typically the configured
     deck name, or the host address when no name is available).
     """
-    from app.backend.hyperdeck_control import send_hyperdeck_command, parse_hyperdeck_response
     from app.backend.core_daemon import global_deck_state_cache
+    from app.backend.hyperdeck_control import parse_hyperdeck_response, send_hyperdeck_command
     try:
         metadata_results: list[dict[str, Any]] = []
         if command == "record":
@@ -1308,9 +1324,9 @@ async def _send_command_to_deck(deck_id: str, host: str, command: str) -> dict:
 
 async def _apply_settings_to_host(host: str, settings: dict[str, Any]) -> dict[str, Any]:
     from app.backend.hyperdeck_control import (
-        send_hyperdeck_command,
-        parse_hyperdeck_response,
         build_configuration_command,
+        parse_hyperdeck_response,
+        send_hyperdeck_command,
     )
 
     commands = build_configuration_command(settings)
@@ -1329,7 +1345,7 @@ async def _apply_settings_to_host(host: str, settings: dict[str, Any]) -> dict[s
 
 
 async def _run_scheduled_playback(host: str, play_at_iso: str, cue_clip_id: str = "") -> None:
-    from app.backend.hyperdeck_control import send_hyperdeck_command, parse_hyperdeck_response
+    from app.backend.hyperdeck_control import parse_hyperdeck_response, send_hyperdeck_command
 
     status = _playback_schedule_status.setdefault(host, {})
     status.update({
@@ -1438,8 +1454,8 @@ async def list_deck_recordings(host: str, slot_id: str = "1"):
 async def list_deck_clips(host: str, slot_id: str = "1"):
     """List deck clip IDs for cue/play/schedule workflows."""
     await _validate_deck_host(host)
-    from app.backend.hyperdeck_control import send_hyperdeck_command, parse_hyperdeck_response
     from app.backend.core_daemon import list_recordings_from_deck
+    from app.backend.hyperdeck_control import parse_hyperdeck_response, send_hyperdeck_command
 
     target_slot = str(slot_id or "1").strip() or "1"
     clips: list[dict[str, str]] = []
@@ -1463,7 +1479,11 @@ async def list_deck_clips(host: str, slot_id: str = "1"):
         source = "ftp_fallback"
         recordings = await list_recordings_from_deck(host, target_slot)
         clips = [
-            {"id": str(idx + 1), "name": str(item.get("name") or f"clip_{idx + 1}"), "label": str(item.get("name") or f"clip_{idx + 1}")}
+            {
+                "id": str(idx + 1),
+                "name": str(item.get("name") or f"clip_{idx + 1}"),
+                "label": str(item.get("name") or f"clip_{idx + 1}"),
+            }
             for idx, item in enumerate(recordings)
         ]
 
@@ -1508,7 +1528,11 @@ async def transfer_deck_recording(host: str, payload: dict[str, Any]):
     decks = await _load_all_deck_hosts()
     deck_name = next((name for name, value in decks.items() if value == host), host)
 
-    from app.backend.core_daemon import global_deck_state_cache, transfer_recording_from_deck, _dedupe_filename_for_destinations
+    from app.backend.core_daemon import (
+        _dedupe_filename_for_destinations,
+        global_deck_state_cache,
+        transfer_recording_from_deck,
+    )
 
     if not local_filename_raw:
         local_filename = _dedupe_filename_for_destinations(destinations, local_filename)
@@ -1648,7 +1672,7 @@ async def cue_deck_playback(host: str, payload: dict[str, Any]):
     if not clip_id or not clip_id.isdigit():
         raise HTTPException(status_code=400, detail="clip_id must be a numeric string.")
 
-    from app.backend.hyperdeck_control import send_hyperdeck_command, parse_hyperdeck_response
+    from app.backend.hyperdeck_control import parse_hyperdeck_response, send_hyperdeck_command
     response = await send_hyperdeck_command(host, f"goto: clip id: {clip_id}")
     parsed = parse_hyperdeck_response(response)
     if not is_hyperdeck_success_code(parsed.get("_code")):
@@ -1668,7 +1692,7 @@ async def play_deck_now(host: str, payload: dict[str, Any] | None = None):
     if clip_id:
         if not clip_id.isdigit():
             raise HTTPException(status_code=400, detail="clip_id must be numeric when provided.")
-        from app.backend.hyperdeck_control import send_hyperdeck_command, parse_hyperdeck_response
+        from app.backend.hyperdeck_control import parse_hyperdeck_response, send_hyperdeck_command
         cue_response = await send_hyperdeck_command(host, f"goto: clip id: {clip_id}")
         cue_parsed = parse_hyperdeck_response(cue_response)
         if not is_hyperdeck_success_code(cue_parsed.get("_code")):
@@ -1678,8 +1702,10 @@ async def play_deck_now(host: str, payload: dict[str, Any] | None = None):
     log_command("play", host, deck_name, result.get("success", False), result.get("response", ""))
     if not result.get("success"):
         status_code = result.get("status_code", 502)
-        detail = result.get("response") if status_code != 502 else f"Deck rejected play command: {result.get('response')}"
-        raise HTTPException(status_code=status_code, detail=detail)
+        resp_detail = result.get("response")
+        if status_code == 502:
+            resp_detail = f"Deck rejected play command: {resp_detail}"
+        raise HTTPException(status_code=status_code, detail=resp_detail)
     return {"status": "ok", "host": host, "clip_id": clip_id, "response": result.get("response", "")}
 
 
@@ -1852,7 +1878,7 @@ async def format_deck_card(host: str, payload: dict[str, Any]):
 async def get_deck_configuration(host: str, debug: bool = False):
     """Retrieve the current configuration from a single HyperDeck."""
     await _validate_deck_host(host)
-    from app.backend.hyperdeck_control import send_hyperdeck_command, parse_hyperdeck_response
+    from app.backend.hyperdeck_control import parse_hyperdeck_response, send_hyperdeck_command
     response = await send_hyperdeck_command(host, "configuration")
     parsed = parse_hyperdeck_response(response)
     if not is_hyperdeck_success_code(parsed.get("_code")):
@@ -1896,9 +1922,9 @@ async def set_deck_configuration(host: str, settings: dict):
     """
     await _validate_deck_host(host)
     from app.backend.hyperdeck_control import (
-        send_hyperdeck_command,
-        parse_hyperdeck_response,
         build_configuration_command,
+        parse_hyperdeck_response,
+        send_hyperdeck_command,
     )
     commands = build_configuration_command(settings)
     if not commands:
@@ -1933,15 +1959,22 @@ async def apply_settings_to_multiple_decks(payload: dict[str, Any]):
     if invalid:
         raise HTTPException(status_code=404, detail=f"Unknown or unconfigured hosts: {', '.join(invalid)}")
 
-    results = await asyncio.gather(*[_apply_settings_to_host(host, settings) for host in targets], return_exceptions=True)
+    tasks = [_apply_settings_to_host(host, settings) for host in targets]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
     normalized_results: list[dict[str, Any]] = []
     for host, result in zip(targets, results):
         if isinstance(result, Exception):
-            normalized_results.append({"host": host, "status": "error", "success": False, "results": [], "error": str(result)})
+            normalized_results.append({
+                "host": host, "status": "error", "success": False,
+                "results": [], "error": str(result),
+            })
         elif isinstance(result, dict):
             normalized_results.append(result)
         else:
-            normalized_results.append({"host": host, "status": "error", "success": False, "results": [], "error": "Unexpected apply-settings result type."})
+            normalized_results.append({
+                "host": host, "status": "error", "success": False,
+                "results": [], "error": "Unexpected apply-settings result type.",
+            })
 
     return {
         "status": "ok",
@@ -2036,7 +2069,11 @@ async def apply_settings_group(group_name: str):
     settings = group.get("settings") or {}
     field_keys = group.get("field_keys") or []
     if isinstance(field_keys, list) and field_keys:
-        scoped_settings = {str(k): v for k, v in settings.items() if str(k).strip().lower() in {str(x).strip().lower() for x in field_keys}}
+        allowed = {str(x).strip().lower() for x in field_keys}
+        scoped_settings = {
+            str(k): v for k, v in settings.items()
+            if str(k).strip().lower() in allowed
+        }
     else:
         scoped_settings = settings
 

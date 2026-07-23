@@ -1,5 +1,9 @@
 # HyperDeck Tools
 
+[![CI](https://github.com/sj-tech-sweden/hyperdeck-tools/actions/workflows/ci.yml/badge.svg)](https://github.com/sj-tech-sweden/hyperdeck-tools/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/sj-tech-sweden/hyperdeck-tools)](https://github.com/sj-tech-sweden/hyperdeck-tools/releases/latest)
+[![Docker](https://img.shields.io/badge/docker-ghcr.io-blue)](https://ghcr.io/sj-tech-sweden/hyperdeck-tools)
+
 A FastAPI + frontend control panel for multi-HyperDeck workflows with:
 
 - deck monitoring and discovery
@@ -43,6 +47,22 @@ python run.py
 Open:
 
 - `http://localhost:8008`
+
+## Docker
+
+Multi-arch image available for `linux/amd64` and `linux/arm64` (Apple Silicon, Raspberry Pi, AWS Graviton).
+
+```bash
+# Pull latest
+docker pull ghcr.io/sj-tech-sweden/hyperdeck-tools:latest
+
+# Run
+docker run -d -p 8008:8008 \
+  -v /path/to/config.yaml:/app/config.yaml \
+  ghcr.io/sj-tech-sweden/hyperdeck-tools:latest
+```
+
+See [docs/using-the-release-workflow.md](docs/using-the-release-workflow.md) for full Docker and binary usage guide.
 
 ## Environment Variables
 

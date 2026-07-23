@@ -34,8 +34,6 @@ def scrape(file_path: str = "app/backend/uploads/schedule.csv") -> list[dict[str
         if not reader.fieldnames:
             return []
 
-        headers = [_norm_header(h) for h in reader.fieldnames]
-
         for row in reader:
             raw = {_norm_header(k): v for k, v in row.items()}
 

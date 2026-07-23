@@ -565,7 +565,9 @@ async def _poll_single_deck(deck_name: str, host: str, config: dict[str, Any]) -
         if not status_display or status_display == "Configured":
             status_display = str(existing.get("status") or "Monitoring")
         if not transport_status_display or transport_status_display == "Configured":
-            transport_status_display = str(existing.get("transport_status") or runtime.get("last_transport_status") or "Monitoring")
+            existing_ts = existing.get("transport_status")
+            runtime_ts = runtime.get("last_transport_status")
+            transport_status_display = str(existing_ts or runtime_ts or "Monitoring")
 
     is_transferring = bool(runtime.get("is_transferring"))
     transfer_progress = int(runtime.get("transfer_progress", 0) or 0)
