@@ -1,0 +1,14 @@
+.git
+.github
+.venv
+__pycache__
+*.pyc
+*.pyo
+tests/
+docs/
+*.md
+LICENSE
+.gitignore
+renovate.json
+pyproject.toml
+requirements-dev.txt

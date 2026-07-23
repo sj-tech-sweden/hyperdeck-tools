@@ -1,5 +1,42 @@
 # Release Notes
 
+## v0.3.0 — CI/CD & Test Infrastructure
+
+Adds automated testing, Docker images, and standalone binaries for macOS and Windows.
+
+### What's New
+
+**CI Workflow**
+- Linting with `ruff` on every push to `main` and pull request
+- 154 unit tests covering core logic: protocol parsing, config normalization, schedule resolution, filename generation, plugin helpers
+- Tests run automatically via GitHub Actions
+
+**Release Workflow**
+- Triggered by tag push (`v*`)
+- Docker multi-arch image built and pushed to GitHub Container Registry (`ghcr.io`) — supports `linux/amd64` and `linux/arm64`
+- macOS standalone binary via PyInstaller
+- Windows standalone binary via PyInstaller
+- All artifacts attached to the GitHub Release automatically
+- See [docs/using-the-release-workflow.md](docs/using-the-release-workflow.md) for usage guide
+
+**Docker Support**
+- `Dockerfile` based on `python:3.12-slim`
+- `.dockerignore` to exclude dev files from image
+- Run with: `docker run -p 8008:8008 ghcr.io/sj-tech-sweden/hyperdeck-tools:latest`
+
+**Test Suite**
+- `tests/test_hyperdeck_control.py` — protocol response parsing, command building, host/port config
+- `tests/test_server.py` — config normalization, schedule normalization, time parsing, slate metadata precedence, atomic writes
+- `tests/test_core_daemon.py` — transport status display, Swedish weekday names, filename generation, deduplication
+- `tests/test_plugins.py` — CSV and Excel plugin helpers, scraper output structure
+
+**Developer Experience**
+- `pyproject.toml` with pytest and ruff configuration
+- `requirements-dev.txt` for test/lint/build dependencies
+- `_atomic_json_write` now creates parent directories automatically
+
+---
+
 ## v0.2.0 — UX & Real-Time Improvements
 
 Quality-of-life release focused on real-time updates, schedule usability, and deck configuration flexibility.
@@ -41,6 +78,12 @@ Quality-of-life release focused on real-time updates, schedule usability, and de
 
 - New `csv_schedule_uploader` plugin for importing schedules from `.csv` files
 - File input accepts `.csv` alongside `.xlsx`
+
+## Folder Browser Quick Access Sidebar
+
+- New sidebar in folder browser with clickable shortcuts to home, `/Volumes/*`, `/media/*`, `/run/media/*`, `/mnt/*`, and configured destinations
+- Mounted disks appear as separate entries — no manual navigation needed
+- Works across macOS, Ubuntu/Debian, Fedora/RHEL/Arch
 
 ## Destination Path Validation
 

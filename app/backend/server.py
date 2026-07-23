@@ -87,6 +87,7 @@ DEFAULT_CONFIG = {
 def _atomic_json_write(file_path: str, data: Any) -> None:
     """Write JSON data atomically using a temp file + rename."""
     dir_name = os.path.dirname(file_path) or "."
+    os.makedirs(dir_name, exist_ok=True)
     fd, tmp_path = tempfile.mkstemp(dir=dir_name, suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
