@@ -20,6 +20,7 @@ A FastAPI + frontend control panel for multi-HyperDeck workflows with:
 - Plugin system for schedule ingestion
   - `gullbrannafestivalen_scraper`
   - `excel_schedule_uploader` (default Excel upload plugin)
+  - See [docs/creating-plugins.md](docs/creating-plugins.md) for the plugin authoring guide
 
 ## UI Screenshot
 
