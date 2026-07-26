@@ -64,7 +64,7 @@ jobs:
         run: pyinstaller --onefile --name hyperdeck-tools --add-data "app/frontend:app/frontend" --add-data "app/backend/plugins:app/backend/plugins" --add-data "app/backend/model_capability_profiles.json:app/backend" run.py
 
       - name: Upload to release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: dist/hyperdeck-tools
 
@@ -85,6 +85,6 @@ jobs:
         run: pyinstaller --onefile --name hyperdeck-tools.exe --add-data "app/frontend;app/frontend" --add-data "app/backend/plugins;app/backend/plugins" --add-data "app/backend/model_capability_profiles.json;app/backend" run.py
 
       - name: Upload to release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: dist/hyperdeck-tools.exe
