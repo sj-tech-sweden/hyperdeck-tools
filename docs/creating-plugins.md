@@ -30,7 +30,7 @@ That's it. The plugin auto-appears in the UI under **Schedule Source**.
 These module-level variables control how the plugin is displayed:
 
 | Variable | Type | Required | Description |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `PLUGIN_LABEL` | `str` | No | Human-readable name shown in the UI. Defaults to a title-cased version of the filename. |
 | `PLUGIN_DESCRIPTION` | `str` | No | Short description shown under the label. Defaults to `"No plugin description provided."` |
 | `PLUGIN_SUPPORTS_FILE_UPLOAD` | `bool` | No | If `True`, the UI shows an upload button for this plugin. Defaults to `False`. |
@@ -73,7 +73,7 @@ async def scrape() -> list[dict[str, str]]:
 Must return a **list of dicts**. Each dict represents one schedule event. Supported keys:
 
 | Key | Required | Description |
-|---|---|---|
+| --- | --- | --- |
 | `id` | Recommended | Unique event identifier. Auto-generated from title + time if missing. |
 | `planned_title` | Recommended | Human-readable event name. Used for filename tokens and display. |
 | `start_time` | Recommended | Format: `YYYY-MM-DD HH:MM` (e.g. `2026-07-15 19:30`) |
@@ -251,7 +251,7 @@ return [
 Plugins are managed through these endpoints:
 
 | Method | Endpoint | Description |
-|---|---|---|
+| --- | --- | --- |
 | `GET` | `/api/plugins` | List all discovered plugins with manifest info |
 | `POST` | `/api/plugins/run/{plugin_name}` | Execute a plugin's `scrape()` function |
 | `POST` | `/api/plugins/upload/{plugin_name}` | Upload a file then run the plugin |
@@ -259,7 +259,7 @@ Plugins are managed through these endpoints:
 ## Bundled Plugins
 
 | Plugin | Type | Description |
-|---|---|---|
+| --- | --- | --- |
 | `excel_schedule_uploader` | File upload | Parse `.xlsx` spreadsheets into schedule rows |
 | `csv_schedule_uploader` | File upload | Parse `.csv` files into schedule rows |
 | `gullbrannafestivalen_scraper` | Web scraper | Fetches the Gullbranna festival program |

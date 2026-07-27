@@ -779,7 +779,7 @@ function createDestinationRowElement(path = '') {
     const div = document.createElement('div');
     div.className = 'flex gap-2 items-center row-destination-item';
     div.innerHTML = `
-        <input type="text" placeholder="/mnt/storage/ingest" value="${escHtml(path)}" class="dest-path block w-full rounded-md border-0 bg-slate-950 px-2 py-1 text-xs text-white ring-1 ring-inset ring-slate-800 focus:outline-none font-mono">
+        <input type="text" placeholder="/mnt/storage/ingest" aria-label="Destination path" value="${escHtml(path)}" class="dest-path block w-full rounded-md border-0 bg-slate-950 px-2 py-1 text-xs text-white ring-1 ring-inset ring-slate-800 focus:outline-none font-mono">
         <button onclick="openFolderBrowser(this.previousElementSibling)" class="text-xs text-indigo-400 hover:text-indigo-300 font-medium cursor-pointer p-1" title="Browse host directory">📁</button>
         <button onclick="this.parentElement.remove()" class="text-rose-500 text-xs px-1 hover:text-rose-400 cursor-pointer">✕</button>
     `;
@@ -811,10 +811,10 @@ function createDeckRowElement(name='', ip='', stage='', port='9993') {
     const div = document.createElement('div');
     div.className = 'flex gap-2 items-center row-deck-item';
     div.innerHTML = `
-        <input type="text" placeholder="Device Label" value="${escHtml(name)}" class="d-name block w-1/4 rounded-md border-0 bg-slate-950 px-2 py-1 text-xs text-white ring-1 ring-inset ring-slate-800 focus:outline-none">
-        <input type="text" placeholder="IP / Hostname" value="${escHtml(ip)}" class="d-ip block w-1/4 rounded-md border-0 bg-slate-950 px-2 py-1 text-xs text-white ring-1 ring-inset ring-slate-800 focus:outline-none">
-        <input type="number" placeholder="Port" value="${escHtml(port)}" class="d-port block w-1/6 rounded-md border-0 bg-slate-950 px-2 py-1 text-xs text-white ring-1 ring-inset ring-slate-800 focus:outline-none">
-        <input type="text" list="cfg-stage-options" placeholder="Stage" value="${escHtml(stage)}" class="d-stage block w-1/4 rounded-md border-0 bg-slate-950 px-2 py-1 text-xs text-white ring-1 ring-inset ring-slate-800 focus:outline-none">
+        <input type="text" placeholder="Device Label" aria-label="Device name" value="${escHtml(name)}" class="d-name block w-1/4 rounded-md border-0 bg-slate-950 px-2 py-1 text-xs text-white ring-1 ring-inset ring-slate-800 focus:outline-none">
+        <input type="text" placeholder="IP / Hostname" aria-label="IP address or hostname" value="${escHtml(ip)}" class="d-ip block w-1/4 rounded-md border-0 bg-slate-950 px-2 py-1 text-xs text-white ring-1 ring-inset ring-slate-800 focus:outline-none">
+        <input type="number" placeholder="Port" aria-label="TCP port" value="${escHtml(port)}" class="d-port block w-1/6 rounded-md border-0 bg-slate-950 px-2 py-1 text-xs text-white ring-1 ring-inset ring-slate-800 focus:outline-none">
+        <input type="text" list="cfg-stage-options" placeholder="Stage" aria-label="Stage name" value="${escHtml(stage)}" class="d-stage block w-1/4 rounded-md border-0 bg-slate-950 px-2 py-1 text-xs text-white ring-1 ring-inset ring-slate-800 focus:outline-none">
         <button onclick="this.parentElement.remove()" class="text-rose-500 text-xs px-1 hover:text-rose-400 cursor-pointer">✕</button>
     `;
     return div;

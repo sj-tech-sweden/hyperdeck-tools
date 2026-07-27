@@ -69,7 +69,7 @@ See [docs/using-the-release-workflow.md](docs/using-the-release-workflow.md) for
 All configuration is optional. Defaults are suitable for local development.
 
 | Variable | Default | Description |
-|---|---|---|
+| --- | --- | --- |
 | `HYPERDECK_HOST` | `0.0.0.0` | Bind address for the web server |
 | `HYPERDECK_PORT` | `8008` | Port for the web server |
 | `HYPERDECK_RELOAD` | `false` | Auto-reload on code changes (set to `true` during development) |
@@ -186,10 +186,10 @@ Also supported as alternatives:
 
 ### Example rows
 
-| start_time       | planned_title    | stage       | id |
-|------------------|------------------|-------------|----|
-| 2026-07-15 19:30 | Evening_Service  | Main Stage  |    |
-| 2026-07-15 21:00 | Concert          | Youth Stage |    |
+| start_time | planned_title | stage | id |
+| --- | --- | --- | --- |
+| 2026-07-15 19:30 | Evening_Service | Main Stage | |
+| 2026-07-15 21:00 | Concert | Youth Stage | |
 
 If `id` is missing, one is generated automatically.
 

@@ -56,7 +56,7 @@
                     <div class="sticky top-2 z-20 -mx-2 px-2 py-2 bg-slate-900/95 backdrop-blur border-b border-slate-800">
                         <div class="flex items-center justify-between">
                             <label class="block text-sm font-medium text-slate-300">Active Metadata Schedule</label>
-                            <select id="plugin-selector" class="rounded bg-slate-950 border border-slate-800 text-xs px-2 py-1 text-slate-300 focus:outline-none focus:ring-1 focus:ring-indigo-500">
+                            <select id="plugin-selector" aria-label="Schedule plugin" class="rounded bg-slate-950 border border-slate-800 text-xs px-2 py-1 text-slate-300 focus:outline-none focus:ring-1 focus:ring-indigo-500">
                                 <option value="">Manual Entry Only</option>
                             </select>
                         </div>
@@ -88,7 +88,7 @@
                     <div id="plugin-upload-panel" class="hidden rounded border border-slate-800 bg-slate-950 p-2 space-y-2">
                         <label class="text-[11px] text-slate-400 block">Upload Excel schedule (.xlsx)</label>
                         <div class="flex gap-2 items-center">
-                            <input id="plugin-file-input" type="file" accept=".xlsx,.csv" class="block w-full text-[11px] text-slate-300 file:mr-2 file:rounded file:border-0 file:bg-slate-800 file:px-2 file:py-1 file:text-slate-200">
+                            <input id="plugin-file-input" type="file" accept=".xlsx,.csv" aria-label="Upload schedule file" class="block w-full text-[11px] text-slate-300 file:mr-2 file:rounded file:border-0 file:bg-slate-800 file:px-2 file:py-1 file:text-slate-200">
                             <button id="btn-plugin-upload" onclick="uploadScheduleFile()" class="text-xs bg-indigo-600/20 text-indigo-300 border border-indigo-500/30 rounded px-2.5 py-1.5 hover:bg-indigo-600 hover:text-white transition cursor-pointer">Upload</button>
                         </div>
                         <p id="plugin-upload-status" class="text-[11px] text-slate-500">No file uploaded yet.</p>
@@ -99,7 +99,7 @@
                         <div class="sticky top-0 z-10 bg-slate-950/95 backdrop-blur text-[11px] font-semibold text-slate-400 tracking-wide uppercase px-1 py-1 mb-1.5 flex justify-between border-b border-slate-800">
                             <span>Dynamic Event Index Mappings</span>
                             <div class="flex items-center gap-2">
-                                <select id="schedule-scope-filter" class="rounded bg-slate-900 border border-slate-800 text-[10px] px-1.5 py-0.5 text-slate-300 normal-case focus:outline-none focus:ring-1 focus:ring-indigo-500">
+                                <select id="schedule-scope-filter" aria-label="Schedule scope filter" class="rounded bg-slate-900 border border-slate-800 text-[10px] px-1.5 py-0.5 text-slate-300 normal-case focus:outline-none focus:ring-1 focus:ring-indigo-500">
                                     <option value="all">Show: All</option>
                                     <option value="in_scope">Show: In Scope</option>
                                 </select>
@@ -134,7 +134,7 @@
                 <!-- Naming Template Sub-Section -->
                 <div class="space-y-2 pt-2 border-t border-slate-800">
                     <label class="block text-sm font-medium text-slate-300">File Naming Template</label>
-                    <input id="cfg-template" type="text" class="block w-full rounded-md border-0 bg-slate-950 px-3 py-2 text-sm text-white ring-1 ring-inset ring-slate-800 focus:ring-2 focus:ring-indigo-500 focus:outline-none font-mono">
+                    <input id="cfg-template" type="text" aria-label="File naming template" class="block w-full rounded-md border-0 bg-slate-950 px-3 py-2 text-sm text-white ring-1 ring-inset ring-slate-800 focus:ring-2 focus:ring-indigo-500 focus:outline-none font-mono">
                     
                     <!-- Token Helper List Component -->
                     <div class="rounded border border-slate-800 bg-slate-950 p-3 mt-2">
@@ -571,7 +571,7 @@
                 <div class="flex items-center justify-between rounded border border-slate-800 bg-slate-950 p-2">
                     <div class="flex items-center gap-2">
                         <label class="text-xs text-slate-400">Slot</label>
-                        <select id="drm-slot" onchange="loadDeckRecordingsList()" class="rounded bg-slate-900 border border-slate-800 text-xs px-2 py-1 text-slate-300 focus:outline-none focus:ring-1 focus:ring-indigo-500"></select>
+                        <select id="drm-slot" onchange="loadDeckRecordingsList()" aria-label="Recording slot" class="rounded bg-slate-900 border border-slate-800 text-xs px-2 py-1 text-slate-300 focus:outline-none focus:ring-1 focus:ring-indigo-500"></select>
                     </div>
                     <button type="button" onclick="loadDeckRecordingsList()" id="btn-drm-refresh" class="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-2.5 py-1.5 rounded cursor-pointer">Refresh</button>
                 </div>
@@ -581,7 +581,7 @@
                         <span class="text-[11px] font-semibold text-slate-300">Upload Playback File</span>
                         <button type="button" onclick="uploadDeckPlaybackFile()" id="btn-drm-upload" class="text-xs bg-indigo-600/20 text-indigo-300 border border-indigo-500/30 rounded px-2.5 py-1.5 hover:bg-indigo-600 hover:text-white transition cursor-pointer">Upload</button>
                     </div>
-                    <input id="drm-upload-file" type="file" accept=".mp4,.mov,.mxf" class="block w-full text-[11px] text-slate-300 file:mr-2 file:rounded file:border-0 file:bg-slate-800 file:px-2 file:py-1 file:text-slate-200">
+                    <input id="drm-upload-file" type="file" accept=".mp4,.mov,.mxf" aria-label="Upload playback file" class="block w-full text-[11px] text-slate-300 file:mr-2 file:rounded file:border-0 file:bg-slate-800 file:px-2 file:py-1 file:text-slate-200">
                     <div id="drm-upload-progress-wrap" class="hidden">
                         <div class="flex justify-between text-[10px] text-slate-400 mb-1">
                             <span>Upload progress</span>
@@ -598,7 +598,7 @@
                     <span class="text-[11px] font-semibold text-slate-300">Playback Cue & Schedule</span>
                     <div class="flex items-center gap-2">
                         <label class="text-[10px] text-slate-400">Clip</label>
-                        <select id="drm-clip-select" onchange="onDeckClipSelectionChanged()" class="flex-1 rounded bg-slate-900 border border-slate-800 text-[11px] px-2 py-1 text-slate-300 focus:outline-none focus:ring-1 focus:ring-indigo-500">
+                        <select id="drm-clip-select" onchange="onDeckClipSelectionChanged()" aria-label="Select clip" class="flex-1 rounded bg-slate-900 border border-slate-800 text-[11px] px-2 py-1 text-slate-300 focus:outline-none focus:ring-1 focus:ring-indigo-500">
                             <option value="">Select a clip from list...</option>
                         </select>
                         <button type="button" onclick="loadDeckClipOptions()" class="text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 py-1.5 rounded cursor-pointer">↻</button>
@@ -657,7 +657,7 @@
                     <!-- Current Traversal Breadcrumb Header -->
                     <div class="flex gap-2 items-center mb-4">
                         <button onclick="navigateFolder(document.getElementById('modal-parent-path').value)" id="btn-folder-up" class="px-2.5 py-1 text-xs bg-slate-800 hover:bg-slate-700 rounded font-bold cursor-pointer">⬆ Up</button>
-                        <input type="text" id="modal-current-path" readonly class="block w-full rounded bg-slate-950 border border-slate-800 px-3 py-1 text-xs font-mono text-slate-300 focus:outline-none">
+                        <input type="text" id="modal-current-path" readonly aria-label="Current folder path" class="block w-full rounded bg-slate-950 border border-slate-800 px-3 py-1 text-xs font-mono text-slate-300 focus:outline-none">
                         <input type="hidden" id="modal-parent-path">
                     </div>
 

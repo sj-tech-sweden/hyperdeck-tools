@@ -7,7 +7,7 @@ This document explains how to trigger releases, what gets built, and how to use 
 The release workflow (`.github/workflows/release.yml`) runs automatically when you push a version tag. It produces three artifacts:
 
 | Artifact | Platform | Format |
-|---|---|---|
+| --- | --- | --- |
 | Docker image | Linux (amd64 + arm64) | Multi-arch image on GHCR |
 | Standalone binary | macOS (Apple Silicon) | Single executable file |
 | Standalone binary | Windows (x64) | Single `.exe` file |
@@ -133,7 +133,7 @@ The binary looks for `config.yaml` in the current working directory. Place it ne
 The workflow uses semantic versioning tags:
 
 | Tag | Result |
-|---|---|
+| --- | --- |
 | `v1.0.0` | Docker tags: `1.0.0`, `1.0`, `latest` |
 | `v1.2.3` | Docker tags: `1.2.3`, `1.2`, `latest` |
 | `v2.0.0-rc1` | Docker tag: `2.0.0-rc1` |

@@ -6,12 +6,14 @@ Adds automated testing, Docker images, and standalone binaries for macOS and Win
 
 ### What's New
 
-**CI Workflow**
+### CI Workflow
+
 - Linting with `ruff` on every push to `main` and pull request
 - 154 unit tests covering core logic: protocol parsing, config normalization, schedule resolution, filename generation, plugin helpers
 - Tests run automatically via GitHub Actions
 
-**Release Workflow**
+### Release Workflow
+
 - Triggered by tag push (`v*`)
 - Docker multi-arch image built and pushed to GitHub Container Registry (`ghcr.io`) — supports `linux/amd64` and `linux/arm64`
 - macOS standalone binary via PyInstaller
@@ -19,18 +21,21 @@ Adds automated testing, Docker images, and standalone binaries for macOS and Win
 - All artifacts attached to the GitHub Release automatically
 - See [docs/using-the-release-workflow.md](docs/using-the-release-workflow.md) for usage guide
 
-**Docker Support**
+### Docker Support
+
 - `Dockerfile` based on `python:3.12-slim`
 - `.dockerignore` to exclude dev files from image
 - Run with: `docker run -p 8008:8008 ghcr.io/sj-tech-sweden/hyperdeck-tools:latest`
 
-**Test Suite**
+### Test Suite
+
 - `tests/test_hyperdeck_control.py` — protocol response parsing, command building, host/port config
 - `tests/test_server.py` — config normalization, schedule normalization, time parsing, slate metadata precedence, atomic writes
 - `tests/test_core_daemon.py` — transport status display, Swedish weekday names, filename generation, deduplication
 - `tests/test_plugins.py` — CSV and Excel plugin helpers, scraper output structure
 
-**Developer Experience**
+### Developer Experience
+
 - `pyproject.toml` with pytest and ruff configuration
 - `requirements-dev.txt` for test/lint/build dependencies
 - `_atomic_json_write` now creates parent directories automatically
