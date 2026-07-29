@@ -2536,24 +2536,35 @@ async function loadDeckRecordingsList() {
         listEl.innerHTML = '';
         recordings.forEach((item) => {
             const row = document.createElement('div');
-            row.className = 'grid grid-cols-12 gap-2 items-center px-2 py-2 border-b border-slate-800 last:border-b-0 text-[11px]';
+            row.className = 'grid grid-cols-14 gap-2 items-center px-2 py-2 border-b border-slate-800 last:border-b-0 text-[11px]';
 
             const name = String(item.name || '');
             const size = formatBytes(item.size || 0);
             const modified = formatDeckModified(item.modified || '');
+            const transferStatus = String(item.transfer_status || 'not_transferred');
 
             const nameEl = document.createElement('div');
-            nameEl.className = 'col-span-6 text-slate-200 truncate';
+            nameEl.className = 'col-span-5 text-slate-200 truncate';
             nameEl.title = name;
             nameEl.textContent = name;
 
             const metaEl = document.createElement('div');
-            metaEl.className = 'col-span-4 text-slate-500 truncate';
+            metaEl.className = 'col-span-3 text-slate-500 truncate';
             metaEl.title = modified ? `${size} · ${modified}` : size;
             metaEl.textContent = modified ? `${size} · ${modified}` : size;
 
+            const statusEl = document.createElement('div');
+            statusEl.className = 'col-span-3 flex items-center gap-1.5';
+            if (transferStatus === 'completed') {
+                statusEl.innerHTML = '<span class="inline-flex items-center gap-1 text-[10px] text-emerald-400"><svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>Transferred</span>';
+            } else if (transferStatus === 'in_progress') {
+                statusEl.innerHTML = '<span class="inline-flex items-center gap-1 text-[10px] text-amber-400"><span class="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse"></span>Transferring</span>';
+            } else if (transferStatus === 'failed') {
+                statusEl.innerHTML = '<span class="inline-flex items-center gap-1 text-[10px] text-rose-400"><svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>Failed</span>';
+            }
+
             const btnWrap = document.createElement('div');
-            btnWrap.className = 'col-span-2 flex justify-end';
+            btnWrap.className = 'col-span-3 flex justify-end';
 
             const clipId = findDeckClipIdByName(name);
 
@@ -2565,19 +2576,35 @@ async function loadDeckRecordingsList() {
 
             const btn = document.createElement('button');
             btn.type = 'button';
-            btn.className = 'text-[10px] bg-indigo-600/20 text-indigo-300 border border-indigo-500/30 rounded px-2 py-1 hover:bg-indigo-600 hover:text-white transition cursor-pointer';
-            btn.textContent = 'Transfer';
-            btn.addEventListener('click', () => transferDeckRecording(name));
+            if (transferStatus === 'completed') {
+                btn.className = 'text-[10px] bg-emerald-600/20 text-emerald-300 border border-emerald-500/30 rounded px-2 py-1 cursor-not-allowed opacity-60';
+                btn.textContent = 'Done';
+                btn.disabled = true;
+            } else if (transferStatus === 'in_progress') {
+                btn.className = 'text-[10px] bg-amber-600/20 text-amber-300 border border-amber-500/30 rounded px-2 py-1 cursor-not-allowed opacity-60';
+                btn.textContent = 'Active';
+                btn.disabled = true;
+            } else {
+                btn.className = 'text-[10px] bg-indigo-600/20 text-indigo-300 border border-indigo-500/30 rounded px-2 py-1 hover:bg-indigo-600 hover:text-white transition cursor-pointer';
+                btn.textContent = 'Transfer';
+                btn.addEventListener('click', () => transferDeckRecording(name));
+            }
             btnWrap.appendChild(pickBtn);
             btnWrap.appendChild(btn);
 
             row.appendChild(nameEl);
             row.appendChild(metaEl);
+            row.appendChild(statusEl);
             row.appendChild(btnWrap);
             listEl.appendChild(row);
         });
 
-        statusEl.innerText = `${recordings.length} recording(s) available in slot ${slotId}.`;
+        const transferredCount = recordings.filter(r => r.transfer_status === 'completed').length;
+        const inProgressCount = recordings.filter(r => r.transfer_status === 'in_progress').length;
+        let statusParts = [`${recordings.length} recording(s) in slot ${slotId}`];
+        if (transferredCount > 0) statusParts.push(`${transferredCount} transferred`);
+        if (inProgressCount > 0) statusParts.push(`${inProgressCount} active`);
+        statusEl.innerText = statusParts.join(' · ');
     } catch (_) {
         listEl.innerHTML = '<div class="text-[11px] text-rose-400 px-2 py-2">Could not reach backend API.</div>';
         statusEl.innerText = 'Failed to load recordings.';

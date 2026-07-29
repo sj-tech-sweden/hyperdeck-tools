@@ -1441,12 +1441,24 @@ async def list_deck_recordings(host: str, slot_id: str = "1"):
     """List available recording files on a deck slot via FTP for manual browsing/transfer."""
     await _validate_deck_host(host)
     from app.backend.core_daemon import list_recordings_from_deck
+    from app.backend.transfer_log import get_transfer_status_map
 
-    recordings = await list_recordings_from_deck(host, str(slot_id or "1"))
+    target_slot = str(slot_id or "1").strip() or "1"
+    recordings = await list_recordings_from_deck(host, target_slot)
+    status_map = get_transfer_status_map(host, target_slot)
+
+    enriched = []
+    for item in recordings:
+        name = str(item.get("name") or "")
+        enriched.append({
+            **item,
+            "transfer_status": status_map.get(name, "not_transferred"),
+        })
+
     return {
         "host": host,
-        "slot_id": str(slot_id or "1"),
-        "recordings": recordings,
+        "slot_id": target_slot,
+        "recordings": enriched,
     }
 
 
@@ -1537,6 +1549,10 @@ async def transfer_deck_recording(host: str, payload: dict[str, Any]):
     if not local_filename_raw:
         local_filename = _dedupe_filename_for_destinations(destinations, local_filename)
 
+    from app.backend.transfer_log import log_transfer_complete, log_transfer_failed, log_transfer_start
+
+    log_transfer_start(host, slot_id, remote_filename, local_filename)
+
     def _progress_callback(pct: int) -> None:
         state = dict(global_deck_state_cache.get(host, {}))
         state["name"] = state.get("name", deck_name)
@@ -1566,6 +1582,7 @@ async def transfer_deck_recording(host: str, payload: dict[str, Any]):
         state["file"] = local_filename
         state["is_transferring"] = False
         global_deck_state_cache[host] = state
+        log_transfer_complete(host, slot_id, remote_filename, local_filename, destinations)
         return {
             "status": "ok",
             "host": host,
@@ -1580,6 +1597,7 @@ async def transfer_deck_recording(host: str, payload: dict[str, Any]):
     state["status"] = "Transfer Failed"
     state["is_transferring"] = False
     global_deck_state_cache[host] = state
+    log_transfer_failed(host, slot_id, remote_filename)
     raise HTTPException(status_code=502, detail="Failed to transfer recording from deck FTP storage.")
 
 
