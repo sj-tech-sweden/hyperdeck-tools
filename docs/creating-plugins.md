@@ -2,12 +2,14 @@
 
 Plugins let you populate the schedule from external sources — spreadsheets, CSV files, web scrapers, APIs, databases, or anything else that can produce a list of events.
 
+> **Note:** This document covers *schedule* (metadata) plugins. For storage plugins (NFS, S3, etc.), see [creating-storage-plugins.md](creating-storage-plugins.md).
+
 ## Quick Start
 
-Create a Python file in `app/backend/plugins/`:
+Create a Python file in `app/backend/plugins/metadata/`:
 
 ```python
-# app/backend/plugins/my_plugin.py
+# app/backend/plugins/metadata/my_plugin.py
 
 PLUGIN_LABEL = "My Schedule Plugin"
 PLUGIN_DESCRIPTION = "Fetches schedule data from my custom source."
@@ -24,6 +26,23 @@ def scrape() -> list[dict[str, str]]:
 ```
 
 That's it. The plugin auto-appears in the UI under **Schedule Source**.
+
+## Plugin Directory Structure
+
+```
+app/backend/plugins/
+├── metadata/
+│   ├── __init__.py
+│   ├── csv_schedule_uploader.py
+│   ├── excel_schedule_uploader.py
+│   └── gullbrannafestivalen_scraper.py
+└── storage/
+    ├── __init__.py
+    ├── local_folder.py
+    └── s3.py
+```
+
+Schedule plugins go in `plugins/metadata/`. Storage plugins go in `plugins/storage/` (see [creating-storage-plugins.md](creating-storage-plugins.md)).
 
 ## Plugin Manifest
 
@@ -243,7 +262,7 @@ return [
 ## File Naming Rules
 
 - Plugin filenames must match `[a-zA-Z0-9_]+` (letters, digits, underscores only).
-- Each plugin is a single `.py` file in `app/backend/plugins/`.
+- Each plugin is a single `.py` file in `app/backend/plugins/metadata/`.
 - The filename (without `.py`) is the plugin's internal name.
 
 ## API Endpoints
@@ -268,7 +287,7 @@ Plugins are managed through these endpoints:
 
 **Plugin doesn't appear in the UI**
 - Check the filename contains only `[a-zA-Z0-9_]` characters.
-- Ensure the file is in `app/backend/plugins/`.
+- Ensure the file is in `app/backend/plugins/metadata/`.
 - Verify `scrape()` is defined at module level.
 
 **Plugin returns zero items**

@@ -338,6 +338,16 @@ function escHtml(str) {
         .replace(/'/g, '&#039;');
 }
 
+/** Escape a string for safe use in HTML attribute values. */
+function escAttr(str) {
+    return String(str ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+}
+
 function openNativePicker(inputEl) {
     if (!inputEl) return;
     inputEl.focus();
@@ -755,6 +765,7 @@ async function pullConfigurationMatrix() {
         }
         
         renderConfigDestinationsList();
+        loadStorageDestinations();
         renderConfigDecksList();
         updateStageModeUI();
         updateAutoModeBadge();
@@ -788,6 +799,265 @@ function createDestinationRowElement(path = '') {
 
 function addDestinationRow(path = '') {
     document.getElementById('cfg-destinations-list').appendChild(createDestinationRowElement(path));
+}
+
+// --- Storage Plugin Destinations Management ---
+let availableStoragePlugins = [];
+let currentStorageDestConfig = {};
+let previousStoragePluginType = '';
+
+async function loadStorageDestinations() {
+    const list = document.getElementById('cfg-storage-destinations-list');
+    if (!list) return;
+
+    try {
+        const [pluginsRes, destsRes] = await Promise.all([
+            fetch('/api/storage-plugins'),
+            fetch('/api/storage-destinations'),
+        ]);
+        const plugins = await pluginsRes.json();
+        const destsData = await destsRes.json();
+        availableStoragePlugins = Array.isArray(plugins) ? plugins : [];
+        const destinations = destsData.storage_destinations || [];
+
+        if (destinations.length === 0) {
+            list.innerHTML = '<div class="text-[11px] text-slate-500 px-2 py-2">No storage plugins configured.</div>';
+            return;
+        }
+
+        list.innerHTML = '';
+        destinations.forEach(dest => {
+            const row = document.createElement('div');
+            row.className = 'flex gap-2 items-center px-2 py-2 border border-slate-800 rounded bg-slate-950 text-[11px]';
+            const pluginLabel = availableStoragePlugins.find(p => p.storage_type === dest.plugin_type)?.label || dest.plugin_type;
+            const queue = dest.queue_status || {};
+            const queueSummary = [];
+            if (queue.active > 0) queueSummary.push(`${queue.active} active`);
+            if (queue.pending > 0) queueSummary.push(`${queue.pending} queued`);
+            if (queue.completed > 0) queueSummary.push(`${queue.completed} done`);
+            const queueText = queueSummary.length > 0 ? queueSummary.join(', ') : 'Idle';
+
+            row.innerHTML = `
+                <div class="flex-1 min-w-0">
+                    <div class="flex items-center gap-2">
+                        <span class="text-slate-200 font-medium truncate">${escHtml(dest.label)}</span>
+                        <span class="text-[9px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">${escHtml(pluginLabel)}</span>
+                        ${dest.enabled ? '<span class="w-1.5 h-1.5 bg-emerald-400 rounded-full"></span>' : '<span class="w-1.5 h-1.5 bg-slate-600 rounded-full"></span>'}
+                    </div>
+                    <div class="text-[10px] text-slate-500 mt-0.5">Queue: ${escHtml(queueText)}</div>
+                </div>
+                <div class="flex items-center gap-1">
+                    <button onclick="editStorageDestination('${escAttr(dest.id)}')" class="text-[10px] bg-slate-800 text-slate-300 border border-slate-700 rounded px-2 py-1 hover:bg-slate-700 hover:text-white transition cursor-pointer">Edit</button>
+                    <button onclick="deleteStorageDestination('${escAttr(dest.id)}', '${escAttr(dest.label)}')" class="text-[10px] bg-rose-600/20 text-rose-300 border border-rose-500/30 rounded px-2 py-1 hover:bg-rose-600 hover:text-white transition cursor-pointer">Del</button>
+                </div>
+            `;
+            list.appendChild(row);
+        });
+    } catch (e) {
+        console.error('Failed to load storage destinations:', e);
+        list.innerHTML = '<div class="text-[11px] text-rose-400 px-2 py-2">Failed to load storage destinations.</div>';
+    }
+}
+
+function openStorageDestModal(editDest = null) {
+    const modal = document.getElementById('storage-dest-modal');
+    const subtitle = document.getElementById('storage-dest-modal-subtitle');
+    const typeSelect = document.getElementById('sd-plugin-type');
+    const editId = document.getElementById('sd-edit-id');
+    const label = document.getElementById('sd-label');
+    const enabled = document.getElementById('sd-enabled');
+    const maxConcurrent = document.getElementById('sd-max-concurrent');
+    const testStatus = document.getElementById('sd-test-status');
+
+    // Populate plugin type dropdown
+    typeSelect.innerHTML = '<option value="">Select a storage plugin...</option>';
+    availableStoragePlugins.filter(p => p.enabled).forEach(p => {
+        const opt = document.createElement('option');
+        opt.value = p.storage_type;
+        opt.textContent = `${p.label} - ${p.description}`;
+        typeSelect.appendChild(opt);
+    });
+
+    if (editDest) {
+        subtitle.textContent = 'Edit storage destination';
+        editId.value = editDest.id;
+        typeSelect.value = editDest.plugin_type;
+        label.value = editDest.label || '';
+        enabled.checked = editDest.enabled !== false;
+        maxConcurrent.value = editDest.max_concurrent || 1;
+        currentStorageDestConfig = editDest.config || {};
+        previousStoragePluginType = editDest.plugin_type || '';
+        onStoragePluginTypeChanged();
+        // Restore field values
+        setTimeout(() => {
+            Object.entries(currentStorageDestConfig).forEach(([key, val]) => {
+                const input = document.getElementById(`sd-field-${key}`);
+                if (input) input.value = val;
+            });
+        }, 50);
+    } else {
+        subtitle.textContent = 'Add a new storage destination';
+        editId.value = '';
+        typeSelect.value = '';
+        label.value = '';
+        enabled.checked = true;
+        maxConcurrent.value = 1;
+        currentStorageDestConfig = {};
+        previousStoragePluginType = '';
+        document.getElementById('sd-config-fields').innerHTML = '';
+    }
+    testStatus.textContent = '';
+    modal.classList.remove('hidden');
+}
+
+function closeStorageDestModal() {
+    document.getElementById('storage-dest-modal').classList.add('hidden');
+}
+
+function onStoragePluginTypeChanged() {
+    const typeSelect = document.getElementById('sd-plugin-type');
+    const fieldsContainer = document.getElementById('sd-config-fields');
+    const labelInput = document.getElementById('sd-label');
+    const storageType = typeSelect.value;
+    const plugin = availableStoragePlugins.find(p => p.storage_type === storageType);
+
+    if (!plugin) {
+        fieldsContainer.innerHTML = '';
+        previousStoragePluginType = storageType;
+        return;
+    }
+
+    const prevPlugin = availableStoragePlugins.find(p => p.storage_type === previousStoragePluginType);
+    const prevLabel = prevPlugin ? prevPlugin.label : '';
+    if (!labelInput.value || labelInput.value === prevLabel) {
+        labelInput.value = plugin.label;
+    }
+    previousStoragePluginType = storageType;
+
+    fieldsContainer.innerHTML = '';
+    (plugin.config_fields || []).forEach(field => {
+        const wrapper = document.createElement('div');
+        const fieldType = field.type === 'password' ? 'password' : 'text';
+        wrapper.innerHTML = `
+            <label class="block text-xs text-slate-400 mb-1">${escHtml(field.label)}${field.required ? ' *' : ''}</label>
+            <input id="sd-field-${escAttr(field.key)}" type="${fieldType}" placeholder="${escAttr(field.default || '')}" value="${escAttr(currentStorageDestConfig[field.key] || field.default || '')}" class="w-full rounded bg-slate-950 border border-slate-800 text-xs px-2 py-1.5 text-slate-300 focus:outline-none font-mono">
+        `;
+        fieldsContainer.appendChild(wrapper);
+    });
+}
+
+async function testStorageConnection() {
+    const typeSelect = document.getElementById('sd-plugin-type');
+    const testStatus = document.getElementById('sd-test-status');
+    const storageType = typeSelect.value;
+    if (!storageType) {
+        testStatus.textContent = 'Select a plugin type first.';
+        testStatus.className = 'text-[11px] text-amber-400';
+        return;
+    }
+
+    const config = collectStorageConfigFields();
+    testStatus.textContent = 'Testing...';
+    testStatus.className = 'text-[11px] text-slate-400';
+
+    try {
+        const res = await fetch(`/api/storage-plugins/${encodeURIComponent(storageType)}/test`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ config }),
+        });
+        const data = await res.json();
+        if (data.ok) {
+            testStatus.textContent = data.message || 'Connection OK';
+            testStatus.className = 'text-[11px] text-emerald-400';
+        } else {
+            testStatus.textContent = data.message || 'Connection failed';
+            testStatus.className = 'text-[11px] text-rose-400';
+        }
+    } catch (e) {
+        testStatus.textContent = 'Test failed: could not reach backend.';
+        testStatus.className = 'text-[11px] text-rose-400';
+    }
+}
+
+function collectStorageConfigFields() {
+    const config = {};
+    const plugin = availableStoragePlugins.find(p => p.storage_type === document.getElementById('sd-plugin-type').value);
+    if (!plugin) return config;
+    (plugin.config_fields || []).forEach(field => {
+        const input = document.getElementById(`sd-field-${field.key}`);
+        if (input) config[field.key] = input.value.trim();
+    });
+    return config;
+}
+
+async function saveStorageDestination() {
+    const editId = document.getElementById('sd-edit-id').value;
+    const storageType = document.getElementById('sd-plugin-type').value;
+    const label = document.getElementById('sd-label').value.trim();
+    const enabled = document.getElementById('sd-enabled').checked;
+    const maxConcurrent = parseInt(document.getElementById('sd-max-concurrent').value || '1', 10);
+    const config = collectStorageConfigFields();
+
+    if (!storageType) {
+        showToast('Select a plugin type.', 'warning');
+        return;
+    }
+    if (!label) {
+        showToast('Enter a label for this destination.', 'warning');
+        return;
+    }
+
+    try {
+        const res = await fetch('/api/storage-destinations', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                id: editId || undefined,
+                plugin_type: storageType,
+                label,
+                enabled,
+                max_concurrent: maxConcurrent,
+                config,
+            }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+            showToast(`Save failed: ${data.detail || 'Unknown error'}`, 'error');
+            return;
+        }
+        closeStorageDestModal();
+        loadStorageDestinations();
+        showToast('Storage destination saved.', 'success');
+    } catch (e) {
+        showToast('Save failed: Could not reach backend.', 'error');
+    }
+}
+
+async function editStorageDestination(destId) {
+    try {
+        const res = await fetch('/api/storage-destinations');
+        const data = await res.json();
+        const dest = (data.storage_destinations || []).find(d => d.id === destId);
+        if (dest) openStorageDestModal(dest);
+    } catch (e) {
+        showToast('Failed to load destination.', 'error');
+    }
+}
+
+async function deleteStorageDestination(destId, label) {
+    if (!confirm(`Delete storage destination "${label}"?`)) return;
+    try {
+        const res = await fetch(`/api/storage-destinations/${encodeURIComponent(destId)}`, { method: 'DELETE' });
+        if (res.ok) {
+            loadStorageDestinations();
+            showToast('Storage destination deleted.', 'success');
+        } else {
+            showToast('Delete failed.', 'error');
+        }
+    } catch (e) {
+        showToast('Delete failed: Could not reach backend.', 'error');
+    }
 }
 
 // --- Dynamic Device Mapping Rows Management ---

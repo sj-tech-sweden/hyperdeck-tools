@@ -63,12 +63,14 @@ app.add_middleware(
 
 SCHEDULE_FILE = "app/backend/schedule.json"
 ACTIVE_EVENT_FILE = "app/backend/active_event.json"
-PLUGINS_DIR = "app/backend/plugins"
+PLUGINS_DIR = "app/backend/plugins/metadata"
+STORAGE_PLUGINS_DIR = "app/backend/plugins/storage"
 CONFIG_FILE = "app/backend/config.json" # Your core hyperdeck/destinations config
 UPLOADS_DIR = "app/backend/uploads"
 MODEL_CAPABILITY_PROFILES_FILE = "app/backend/model_capability_profiles.json"
 DEFAULT_CONFIG = {
     "destinations": [],
+    "storage_destinations": [],
     "filename_template": "{year}{month}{day}_{planned_title}",
     "hyperdecks": {},
     "stage_mode": "global",
@@ -85,21 +87,7 @@ DEFAULT_CONFIG = {
 }
 
 
-def _atomic_json_write(file_path: str, data: Any) -> None:
-    """Write JSON data atomically using a temp file + rename."""
-    dir_name = os.path.dirname(file_path) or "."
-    os.makedirs(dir_name, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(dir=dir_name, suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=4)
-        os.replace(tmp_path, file_path)
-    except Exception:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
+from app.backend.utils import atomic_json_write as _atomic_json_write
 
 
 SLATE_SETTING_KEYS: tuple[str, ...] = (
@@ -178,6 +166,7 @@ _playback_schedule_status: dict[str, dict[str, Any]] = {}
 
 # Ensure the plugins directory exists out of the gate
 os.makedirs(PLUGINS_DIR, exist_ok=True)
+os.makedirs(STORAGE_PLUGINS_DIR, exist_ok=True)
 os.makedirs(UPLOADS_DIR, exist_ok=True)
 
 # --- Active Metadata Context Logic (Shared via File) ---
@@ -662,6 +651,8 @@ def normalize_config_payload(config: dict[str, Any]) -> dict[str, Any]:
 
     if not isinstance(merged.get("destinations"), list):
         merged["destinations"] = []
+    if not isinstance(merged.get("storage_destinations"), list):
+        merged["storage_destinations"] = []
     if not isinstance(merged.get("hyperdecks"), dict):
         merged["hyperdecks"] = {}
     if not isinstance(merged.get("deck_stages"), dict):
@@ -1031,6 +1022,97 @@ async def upload_plugin_source_file(plugin_name: str, file: UploadFile = File(..
         raise HTTPException(status_code=500, detail=f"Could not store uploaded file: {exc}")
 
     return await run_plugin(plugin_name, {"file_path": target_path})
+
+
+# --- Storage Plugin System ---
+
+@app.get("/api/storage-plugins")
+async def list_storage_plugins():
+    """List available storage plugin manifests."""
+    from app.backend.storage_plugin_manager import discover_storage_plugins
+    return discover_storage_plugins()
+
+
+@app.post("/api/storage-plugins/{storage_type}/test")
+async def test_storage_plugin_connection(storage_type: str, payload: dict[str, Any]):
+    """Test connectivity for a storage plugin configuration."""
+    from app.backend.storage_plugin_manager import test_storage_connection
+    config = payload.get("config", {})
+    return test_storage_connection(storage_type, config)
+
+
+@app.get("/api/storage-destinations")
+async def list_storage_destinations():
+    """List configured storage destinations."""
+    from app.backend.storage_plugin_manager import load_storage_destinations, get_all_queue_status
+    destinations = load_storage_destinations()
+    queue_status = get_all_queue_status()
+    enriched = []
+    for dest in destinations:
+        dest_id = dest.get("id", "")
+        enriched.append({
+            **dest,
+            "queue_status": queue_status.get(dest_id, {"pending": 0, "active": 0, "completed": 0, "failed": 0}),
+        })
+    return {"storage_destinations": enriched}
+
+
+@app.post("/api/storage-destinations")
+async def save_storage_destination(payload: dict[str, Any]):
+    """Add or update a storage destination in config."""
+    dest_id = str(payload.get("id", "")).strip()
+    plugin_type = str(payload.get("plugin_type", "")).strip()
+    label = str(payload.get("label", "")).strip()
+    enabled = bool(payload.get("enabled", True))
+    max_concurrent = max(1, min(10, int(payload.get("max_concurrent", 1))))
+    config = payload.get("config", {})
+
+    if not dest_id:
+        import uuid
+        dest_id = str(uuid.uuid4())[:8]
+    if not plugin_type:
+        raise HTTPException(status_code=400, detail="plugin_type is required.")
+    if not label:
+        label = plugin_type.replace("_", " ").title()
+
+    storage_dest = {
+        "id": dest_id,
+        "plugin_type": plugin_type,
+        "label": label,
+        "enabled": enabled,
+        "max_concurrent": max_concurrent,
+        "config": config,
+    }
+
+    full_config = await get_config()
+    destinations = full_config.get("storage_destinations", [])
+    existing_idx = next((i for i, d in enumerate(destinations) if d.get("id") == dest_id), None)
+    if existing_idx is not None:
+        destinations[existing_idx] = storage_dest
+    else:
+        destinations.append(storage_dest)
+    full_config["storage_destinations"] = destinations
+
+    _atomic_json_write(CONFIG_FILE, normalize_config_payload(full_config))
+    return {"status": "ok", "id": dest_id}
+
+
+@app.delete("/api/storage-destinations/{dest_id}")
+async def delete_storage_destination(dest_id: str):
+    """Remove a storage destination from config."""
+    full_config = await get_config()
+    destinations = full_config.get("storage_destinations", [])
+    full_config["storage_destinations"] = [d for d in destinations if d.get("id") != dest_id]
+    _atomic_json_write(CONFIG_FILE, normalize_config_payload(full_config))
+    return {"status": "ok"}
+
+
+@app.get("/api/storage-destinations/{dest_id}/queue")
+async def get_storage_destination_queue(dest_id: str):
+    """Get queue status for a specific storage destination."""
+    from app.backend.storage_plugin_manager import get_all_queue_status
+    queue_status = get_all_queue_status()
+    return queue_status.get(dest_id, {"pending": 0, "active": 0, "completed": 0, "failed": 0})
 
 
 # --- HyperDeck Control & Config Routes (Brought back in) ---
@@ -1583,6 +1665,10 @@ async def transfer_deck_recording(host: str, payload: dict[str, Any]):
         state["is_transferring"] = False
         global_deck_state_cache[host] = state
         log_transfer_complete(host, slot_id, remote_filename, local_filename, destinations)
+
+        from app.backend.core_daemon import _distribute_to_storage_destinations
+        await _distribute_to_storage_destinations(local_filename, config, host)
+
         return {
             "status": "ok",
             "host": host,

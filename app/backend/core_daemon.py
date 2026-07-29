@@ -499,6 +499,7 @@ async def _trigger_transfer_for_stop(
         runtime["transfer_eta_seconds"] = 0
         global_deck_state_cache[host] = current
         log_transfer_complete(host, slot_id, latest_file, local_filename, destinations)
+        await _distribute_to_storage_destinations(local_filename, config, host)
     else:
         current = dict(global_deck_state_cache.get(host, {}))
         current["status"] = "Transfer Failed"
@@ -507,6 +508,56 @@ async def _trigger_transfer_for_stop(
         runtime["transfer_eta_seconds"] = None
         global_deck_state_cache[host] = current
         log_transfer_failed(host, slot_id, latest_file)
+
+
+async def _distribute_to_storage_destinations(
+    local_filename: str,
+    config: dict[str, Any],
+    host: str = "",
+) -> None:
+    """Queue file transfers to all enabled storage destinations."""
+    from app.backend.storage_plugin_manager import (
+        get_enabled_storage_destinations,
+        get_or_create_queue,
+        send_file_to_storage,
+    )
+
+    storage_dests = get_enabled_storage_destinations()
+    if not storage_dests:
+        return
+
+    destinations = [str(p).strip() for p in (config.get("destinations") or []) if str(p).strip()]
+    if not destinations:
+        return
+
+    local_path = ""
+    for dest_dir in destinations:
+        candidate = os.path.join(dest_dir, local_filename)
+        if os.path.exists(candidate):
+            local_path = candidate
+            break
+
+    if not local_path:
+        return
+
+    for dest in storage_dests:
+        dest_id = dest.get("id", "")
+        plugin_type = dest.get("plugin_type", "")
+        dest_config = dest.get("config", {})
+        max_concurrent = dest.get("max_concurrent", 1)
+
+        if not dest_id or not plugin_type:
+            continue
+
+        queue = get_or_create_queue(dest_id, max_concurrent)
+        await queue.queue_transfer(
+            storage_type=plugin_type,
+            local_path=local_path,
+            remote_name=local_filename,
+            config=dest_config,
+            deck_state_cache=global_deck_state_cache,
+            host=host,
+        )
 
 
 async def _poll_single_deck(deck_name: str, host: str, config: dict[str, Any]) -> None:
