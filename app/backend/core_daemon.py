@@ -450,6 +450,10 @@ async def _trigger_transfer_for_stop(
         "is_transferring": True,
     }
 
+    from app.backend.transfer_log import log_transfer_start
+
+    log_transfer_start(host, slot_id, latest_file, local_filename)
+
     def _progress_callback(pct: int, downloaded: int = 0, total: int = 0, elapsed: float = 0.0) -> None:
         runtime["transfer_progress"] = pct
         eta_seconds = None
@@ -480,6 +484,9 @@ async def _trigger_transfer_for_stop(
     )
 
     runtime["is_transferring"] = False
+
+    from app.backend.transfer_log import log_transfer_complete, log_transfer_failed
+
     if success:
         current = dict(global_deck_state_cache.get(host, {}))
         current["status"] = "Transfer Complete"
@@ -491,6 +498,7 @@ async def _trigger_transfer_for_stop(
         runtime["transfer_file"] = local_filename
         runtime["transfer_eta_seconds"] = 0
         global_deck_state_cache[host] = current
+        log_transfer_complete(host, slot_id, latest_file, local_filename, destinations)
     else:
         current = dict(global_deck_state_cache.get(host, {}))
         current["status"] = "Transfer Failed"
@@ -498,6 +506,7 @@ async def _trigger_transfer_for_stop(
         current["transfer_eta_seconds"] = None
         runtime["transfer_eta_seconds"] = None
         global_deck_state_cache[host] = current
+        log_transfer_failed(host, slot_id, latest_file)
 
 
 async def _poll_single_deck(deck_name: str, host: str, config: dict[str, Any]) -> None:
