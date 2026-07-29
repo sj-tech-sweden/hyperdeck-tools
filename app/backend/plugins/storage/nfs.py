@@ -7,7 +7,6 @@ and unmounting. Requires root/sudo access for mount operations.
 import os
 import shutil
 import subprocess
-import tempfile
 
 PLUGIN_LABEL = "NFS Share"
 PLUGIN_DESCRIPTION = "Upload files to an NFS share (auto-mount/unmount)"
@@ -15,8 +14,14 @@ PLUGIN_STORAGE_TYPE = "nfs"
 PLUGIN_CONFIG_FIELDS = [
     {"key": "server", "label": "NFS Server Address", "type": "text", "required": True, "default": ""},
     {"key": "share", "label": "Export Path", "type": "text", "required": True, "default": "/export"},
-    {"key": "mount_point", "label": "Local Mount Point", "type": "text", "required": True, "default": "/mnt/hyperdeck_nfs"},
-    {"key": "options", "label": "Mount Options (optional)", "type": "text", "required": False, "default": "rw,soft,timeo=10"},
+    {
+        "key": "mount_point", "label": "Local Mount Point", "type": "text",
+        "required": True, "default": "/mnt/hyperdeck_nfs",
+    },
+    {
+        "key": "options", "label": "Mount Options (optional)", "type": "text",
+        "required": False, "default": "rw,soft,timeo=10",
+    },
     {"key": "subfolder", "label": "Subfolder (optional)", "type": "text", "required": False, "default": ""},
 ]
 

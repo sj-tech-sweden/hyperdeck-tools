@@ -12,8 +12,11 @@ PLUGIN_STORAGE_TYPE = "s3"
 PLUGIN_CONFIG_FIELDS = [
     {"key": "bucket", "label": "Bucket Name", "type": "text", "required": True, "default": ""},
     {"key": "region", "label": "Region", "type": "text", "required": False, "default": "us-east-1"},
+    {
+        "key": "endpoint_url", "label": "Endpoint URL (optional, for S3-compatible)",
+        "type": "text", "required": False, "default": "",
+    },
     {"key": "prefix", "label": "Key Prefix (optional)", "type": "text", "required": False, "default": ""},
-    {"key": "endpoint_url", "label": "Endpoint URL (optional, for S3-compatible)", "type": "text", "required": False, "default": ""},
     {"key": "access_key", "label": "Access Key ID", "type": "text", "required": True, "default": ""},
     {"key": "secret_key", "label": "Secret Access Key", "type": "password", "required": True, "default": ""},
 ]

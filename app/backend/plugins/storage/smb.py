@@ -53,7 +53,7 @@ def _get_smb_connection(config: dict):
 
 def _ensure_directory(tree, path_parts: list[str]) -> None:
     """Ensure a directory path exists on the SMB share."""
-    from smbprotocol.open import Open, CreateDisposition, ImpersonationLevel, AccessMask, ShareAccess
+    from smbprotocol.open import AccessMask, CreateDisposition, ImpersonationLevel, Open
 
     current = ""
     for part in path_parts:
@@ -92,7 +92,7 @@ def send_file(local_path: str, remote_name: str, config: dict) -> bool:
     if not os.path.exists(local_path):
         return False
 
-    from smbprotocol.open import Open, CreateDisposition, ImpersonationLevel, AccessMask, ShareAccess
+    from smbprotocol.open import AccessMask, CreateDisposition, ImpersonationLevel, Open
 
     conn, session, tree = None, None, None
     try:
@@ -152,7 +152,7 @@ def send_file(local_path: str, remote_name: str, config: dict) -> bool:
 def test_connection(config: dict) -> dict:
     """Test SMB connectivity by connecting and listing the share."""
     try:
-        from smbprotocol.open import Open, CreateDisposition, ImpersonationLevel, AccessMask
+        from smbprotocol.open import AccessMask, CreateDisposition, ImpersonationLevel, Open
     except ImportError:
         return {"ok": False, "message": "smbprotocol is not installed. Install with: pip install smbprotocol"}
 

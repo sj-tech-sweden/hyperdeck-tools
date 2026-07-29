@@ -20,10 +20,22 @@ PLUGIN_CONFIG_FIELDS = [
     {"key": "tenant_id", "label": "Tenant ID", "type": "text", "required": True, "default": ""},
     {"key": "client_id", "label": "Client ID (Application)", "type": "text", "required": True, "default": ""},
     {"key": "client_secret", "label": "Client Secret", "type": "password", "required": True, "default": ""},
-    {"key": "auth_mode", "label": "Auth Mode (onedrive / sharepoint_app)", "type": "text", "required": True, "default": "onedrive"},
-    {"key": "refresh_token", "label": "Refresh Token (for OneDrive)", "type": "password", "required": False, "default": ""},
-    {"key": "site_url", "label": "SharePoint Site URL (for SharePoint)", "type": "text", "required": False, "default": ""},
-    {"key": "drive_path", "label": "Drive Path (folder path in the drive)", "type": "text", "required": False, "default": "/HyperDeck"},
+    {
+        "key": "auth_mode", "label": "Auth Mode (onedrive / sharepoint_app)",
+        "type": "text", "required": True, "default": "onedrive",
+    },
+    {
+        "key": "refresh_token", "label": "Refresh Token (for OneDrive)",
+        "type": "password", "required": False, "default": "",
+    },
+    {
+        "key": "site_url", "label": "SharePoint Site URL (for SharePoint)",
+        "type": "text", "required": False, "default": "",
+    },
+    {
+        "key": "drive_path", "label": "Drive Path (folder path in the drive)",
+        "type": "text", "required": False, "default": "/HyperDeck",
+    },
 ]
 
 

@@ -519,7 +519,6 @@ async def _distribute_to_storage_destinations(
     from app.backend.storage_plugin_manager import (
         get_enabled_storage_destinations,
         get_or_create_queue,
-        send_file_to_storage,
     )
 
     storage_dests = get_enabled_storage_destinations()

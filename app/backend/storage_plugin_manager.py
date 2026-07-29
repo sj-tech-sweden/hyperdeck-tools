@@ -1,11 +1,10 @@
-import asyncio
 import ast
+import asyncio
 import importlib.util
 import json
 import logging
 import os
 import re
-import time
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -53,11 +52,15 @@ def read_storage_plugin_manifest(plugin_name: str) -> dict[str, Any] | None:
         for target in node.targets:
             if not isinstance(target, ast.Name):
                 continue
-            if target.id == "PLUGIN_LABEL" and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+            is_str_const = (
+                isinstance(node.value, ast.Constant)
+                and isinstance(node.value.value, str)
+            )
+            if target.id == "PLUGIN_LABEL" and is_str_const:
                 manifest["label"] = node.value.value
-            elif target.id == "PLUGIN_DESCRIPTION" and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+            elif target.id == "PLUGIN_DESCRIPTION" and is_str_const:
                 manifest["description"] = node.value.value
-            elif target.id == "PLUGIN_STORAGE_TYPE" and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+            elif target.id == "PLUGIN_STORAGE_TYPE" and is_str_const:
                 manifest["storage_type"] = node.value.value
             elif target.id == "PLUGIN_CONFIG_FIELDS" and isinstance(node.value, (ast.List, ast.Tuple)):
                 manifest["config_fields"] = _parse_config_fields_ast(node.value)
@@ -153,7 +156,8 @@ def send_file_to_storage(
     try:
         result = module.send_file(local_path, remote_name, config)
         if result:
-            logger.info("Storage upload OK: %s -> %s[%s]", remote_name, storage_type, config.get("bucket") or config.get("path", ""))
+            dest = config.get("bucket") or config.get("path", "")
+            logger.info("Storage upload OK: %s -> %s[%s]", remote_name, storage_type, dest)
         else:
             logger.warning("Storage upload returned False: %s -> %s", remote_name, storage_type)
         return bool(result)
