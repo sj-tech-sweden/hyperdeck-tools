@@ -1,10 +1,10 @@
 
-from app.backend.plugins.csv_schedule_uploader import _build_start_time as csv_build_start_time
-from app.backend.plugins.csv_schedule_uploader import _norm_header as csv_norm_header
-from app.backend.plugins.csv_schedule_uploader import scrape as csv_scrape
-from app.backend.plugins.excel_schedule_uploader import _build_start_time as excel_build_start_time
-from app.backend.plugins.excel_schedule_uploader import _format_datetime
-from app.backend.plugins.excel_schedule_uploader import _norm_header as excel_norm_header
+from app.backend.plugins.metadata.csv_schedule_uploader import _build_start_time as csv_build_start_time
+from app.backend.plugins.metadata.csv_schedule_uploader import _norm_header as csv_norm_header
+from app.backend.plugins.metadata.csv_schedule_uploader import scrape as csv_scrape
+from app.backend.plugins.metadata.excel_schedule_uploader import _build_start_time as excel_build_start_time
+from app.backend.plugins.metadata.excel_schedule_uploader import _format_datetime
+from app.backend.plugins.metadata.excel_schedule_uploader import _norm_header as excel_norm_header
 
 # ---------------------------------------------------------------------------
 # CSV plugin helpers

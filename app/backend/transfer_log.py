@@ -1,26 +1,11 @@
 import datetime
 import json
 import os
-import tempfile
 from typing import Any
 
+from app.backend.utils import atomic_json_write
+
 TRANSFERS_FILE = "app/backend/transfers.json"
-
-
-def _atomic_json_write(file_path: str, data: Any) -> None:
-    dir_name = os.path.dirname(file_path) or "."
-    os.makedirs(dir_name, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(dir=dir_name, suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=4)
-        os.replace(tmp_path, file_path)
-    except Exception:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
 
 
 def _load_transfers() -> dict[str, dict[str, Any]]:
@@ -33,8 +18,40 @@ def _load_transfers() -> dict[str, dict[str, Any]]:
         return {}
 
 
+MAX_TRANSFER_LOG_ENTRIES = 5000
+MAX_TRANSFER_LOG_AGE_DAYS = 30
+
+
+def _prune_transfers(data: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Remove old entries to keep the transfer log manageable."""
+    if len(data) <= MAX_TRANSFER_LOG_ENTRIES:
+        return data
+
+    cutoff = datetime.datetime.now() - datetime.timedelta(days=MAX_TRANSFER_LOG_AGE_DAYS)
+    pruned = {}
+    for key, entry in data.items():
+        ts = entry.get("timestamp", "")
+        try:
+            entry_time = datetime.datetime.fromisoformat(ts)
+            if entry_time > cutoff:
+                pruned[key] = entry
+        except (ValueError, TypeError):
+            pruned[key] = entry
+
+    if len(pruned) > MAX_TRANSFER_LOG_ENTRIES:
+        sorted_items = sorted(
+            pruned.items(),
+            key=lambda x: x[1].get("timestamp", ""),
+            reverse=True,
+        )
+        pruned = dict(sorted_items[:MAX_TRANSFER_LOG_ENTRIES])
+
+    return pruned
+
+
 def _save_transfers(data: dict[str, dict[str, Any]]) -> None:
-    _atomic_json_write(TRANSFERS_FILE, data)
+    pruned = _prune_transfers(data)
+    atomic_json_write(TRANSFERS_FILE, pruned)
 
 
 def _make_key(host: str, slot_id: str, remote_filename: str) -> str:
