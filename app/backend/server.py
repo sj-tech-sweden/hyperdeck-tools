@@ -18,6 +18,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+from app.backend.utils import atomic_json_write as _atomic_json_write
+
 logger = logging.getLogger(__name__)
 
 # Command audit log - ring buffer of last 200 entries
@@ -85,9 +87,6 @@ DEFAULT_CONFIG = {
     },
     "settings_groups": {},
 }
-
-
-from app.backend.utils import atomic_json_write as _atomic_json_write
 
 
 SLATE_SETTING_KEYS: tuple[str, ...] = (
@@ -1044,7 +1043,7 @@ async def test_storage_plugin_connection(storage_type: str, payload: dict[str, A
 @app.get("/api/storage-destinations")
 async def list_storage_destinations():
     """List configured storage destinations."""
-    from app.backend.storage_plugin_manager import load_storage_destinations, get_all_queue_status
+    from app.backend.storage_plugin_manager import get_all_queue_status, load_storage_destinations
     destinations = load_storage_destinations()
     queue_status = get_all_queue_status()
     enriched = []

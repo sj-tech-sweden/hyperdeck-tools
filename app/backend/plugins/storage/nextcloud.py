@@ -241,7 +241,7 @@ def test_connection(config: dict) -> dict:
 
         return {"ok": False, "message": f"Unexpected response from server: HTTP {resp.status_code}"}
 
-    except SSLError as e:
+    except SSLError:
         return {
             "ok": False,
             "message": (
@@ -250,7 +250,7 @@ def test_connection(config: dict) -> dict:
                 "or install the certificate on the server."
             ),
         }
-    except ConnectionError as e:
+    except ConnectionError:
         return {
             "ok": False,
             "message": (
