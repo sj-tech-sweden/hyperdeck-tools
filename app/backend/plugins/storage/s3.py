@@ -4,7 +4,10 @@ Uploads files to S3-compatible object storage (AWS S3, MinIO, DigitalOcean Space
 Requires the 'boto3' package to be installed.
 """
 
+import logging
 import os
+
+logger = logging.getLogger(__name__)
 
 PLUGIN_LABEL = "Amazon S3"
 PLUGIN_DESCRIPTION = "Upload files to an S3-compatible bucket (AWS S3, MinIO, etc.)"
@@ -57,7 +60,10 @@ def send_file(local_path: str, remote_name: str, config: dict) -> bool:
         client = _get_s3_client(config)
         client.upload_file(local_path, bucket, key)
         return True
-    except Exception:
+    except ImportError:
+        raise
+    except Exception as e:
+        logger.error("S3 upload failed: %s -> s3://%s/%s: %s", local_path, bucket, key, e)
         return False
 
 

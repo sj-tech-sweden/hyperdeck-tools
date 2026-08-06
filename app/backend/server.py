@@ -47,6 +47,8 @@ CORS_ALLOW_CREDENTIALS = os.environ.get("HYPERDECK_CORS_CREDENTIALS", "true").lo
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     from app.backend.core_daemon import start_background_monitor, stop_background_monitor
+    from app.backend.transfer_log import reconcile_in_progress_transfers
+    reconcile_in_progress_transfers()
     start_background_monitor()
     yield
     await stop_background_monitor()

@@ -9,6 +9,24 @@ let currentPluginSelection = '';
 const PLUGIN_SELECTION_STORAGE_KEY = 'hyperdeck.schedulePluginSelection';
 let scheduleSaveDebounceTimer = null;
 
+// --- Service Detection & API Bases ---
+const THIS_PORT = window.location.port;
+const IS_WP = THIS_PORT === '8009';
+const IS_HD = THIS_PORT === '8008' || THIS_PORT === '';
+
+const HD_API_BASE = IS_HD ? '' : `${window.location.protocol}//${window.location.hostname}:8008`;
+const WP_API_BASE = IS_WP ? '' : `${window.location.protocol}//${window.location.hostname}:8009`;
+
+let servicesAvailable = { hyperdeck: IS_HD, webpresenter: IS_WP };
+let activeTab = localStorage.getItem('activeTab') || (IS_WP ? 'webpresenter' : 'hyperdeck');
+
+// --- Web Presenter State ---
+let wpStateCache = {};
+let wpSseSource = null;
+let wpPresentersConfig = {};
+let wpKeyPlugins = [];
+let wpPollInterval = null;
+
 function showToast(message, type = 'info', durationMs = 4000) {
     const container = document.getElementById('toast-container');
     if (!container) return;
@@ -133,6 +151,55 @@ function toggleEventSlateFields(buttonEl) {
     const shouldShow = Array.from(extras).some((el) => el.classList.contains('hidden'));
     extras.forEach((el) => el.classList.toggle('hidden', !shouldShow));
     buttonEl.innerText = shouldShow ? 'Show fewer fields' : 'Show all fields';
+}
+
+let expandedStreamRows = new Set();
+
+function toggleEventStreamFields(buttonEl) {
+    const row = buttonEl.closest('.schedule-row-item');
+    if (!row) return;
+    const fields = row.querySelector('.sch-stream-fields');
+    if (!fields) return;
+    const key = row.dataset.rowKey;
+    const shouldShow = fields.style.display === 'none' || fields.classList.contains('hidden');
+    fields.style.display = shouldShow ? '' : 'none';
+    fields.classList.remove('hidden');
+    buttonEl.innerText = shouldShow ? 'Hide Stream Settings' : 'Stream Settings';
+    if (shouldShow) {
+        expandedStreamRows.add(key);
+        const select = fields.querySelector('.sch-stream-profile');
+        if (select) {
+            const current = select.value || '';
+            loadWpProfilesIntoSelect(select, current);
+            if (current) {
+                fields.querySelectorAll('input, select').forEach(f => {
+                    if (f.classList.contains('sch-stream-profile')) return;
+                    f.disabled = true;
+                    f.classList.add('opacity-60');
+                });
+            }
+        }
+    } else {
+        expandedStreamRows.delete(key);
+    }
+}
+
+function loadWpProfilesIntoSelect(select, currentValue) {
+    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/profiles` : '/api/wp/profiles';
+    fetch(url).then(r => r.json()).then(profiles => {
+        select.innerHTML = '<option value="">None</option>';
+        (Array.isArray(profiles) ? profiles : []).forEach(p => {
+            const opt = document.createElement('option');
+            opt.value = p.name;
+            opt.textContent = p.name;
+            if (p.name === currentValue) opt.selected = true;
+            select.appendChild(opt);
+        });
+    }).catch(() => {});
+}
+
+function wpRefreshAllProfileSelects() {
+    wpLoadApplyProfileSelect();
 }
 
 function toggleDeckSlateSection(section) {
@@ -440,6 +507,23 @@ function getVisibleScheduleRowsFromDOM() {
         const domKey = decodeURIComponent(el.dataset.rowKey || '');
         const slate_metadata = buildSlateMetadataFromContainer(el, 'sch');
 
+        // Read stream settings - use closest() to find within the hidden container
+        const streamFields = el.querySelector('.sch-stream-fields');
+        const getStreamVal = (cls) => {
+            if (!streamFields) return '';
+            const input = streamFields.querySelector(cls);
+            return input ? input.value : '';
+        };
+
+        const protocol = getStreamVal('.sch-protocol') || 'rtmp';
+        const quality = getStreamVal('.sch-quality') || '';
+        const videoMode = getStreamVal('.sch-video-mode') || '';
+        const primaryUrl = getStreamVal('.sch-primary-url') || '';
+        const primaryKey = getStreamVal('.sch-primary-key') || '';
+        const backupUrl = getStreamVal('.sch-backup-url') || '';
+        const backupKey = getStreamVal('.sch-backup-key') || '';
+        const streamProfile = getStreamVal('.sch-stream-profile') || '';
+
         let resolvedId = id;
         if (!resolvedId && start_time) {
             const safeTitle = (plannedTitle || `event_${idx + 1}`).replace(/\s+/g, '_').replace(/[^\w\-]/g, '').toLowerCase();
@@ -454,6 +538,14 @@ function getVisibleScheduleRowsFromDOM() {
             start_time,
             stage,
             slate_metadata,
+            protocol,
+            quality,
+            video_mode: videoMode,
+            primary_url: primaryUrl,
+            primary_key: primaryKey,
+            backup_url: backupUrl,
+            backup_key: backupKey,
+            stream_profile: streamProfile,
         });
     });
     return rows;
@@ -472,6 +564,14 @@ function mergeVisibleRowsIntoCache() {
             start_time: row.start_time,
             stage: row.stage,
             slate_metadata: row.slate_metadata || {},
+            protocol: row.protocol || 'rtmp',
+            quality: row.quality || '',
+            video_mode: row.video_mode || '',
+            primary_url: row.primary_url || '',
+            primary_key: row.primary_key || '',
+            backup_url: row.backup_url || '',
+            backup_key: row.backup_key || '',
+            stream_profile: row.stream_profile || '',
         };
         const rowKey = row._key || row._row_key || scheduleItemKey(candidate);
         if (!rowKey) {
@@ -607,14 +707,14 @@ function updateStageModeUI() {
 
 async function updateDashboardMetrics() {
     try {
-        const res = await fetch('/api/state');
+        const res = await fetch(HD_API_BASE + '/api/state');
         if (!res.ok) return;
         const state = await res.json();
         const container = document.getElementById('decks-container');
 
         // Keep the staging HUD aligned with backend auto-selected active context.
         try {
-            const activeContextRes = await fetch('/api/schedule/active');
+            const activeContextRes = await fetch(HD_API_BASE + '/api/schedule/active');
             if (activeContextRes.ok) {
                 const activeContext = await activeContextRes.json();
                 const nextId = (activeContext?.id || 'default').toString();
@@ -739,7 +839,7 @@ async function updateDashboardMetrics() {
 
 async function pullConfigurationMatrix() {
     try {
-        const res = await fetch('/api/config');
+        const res = await fetch(HD_API_BASE + '/api/config');
         if (!res.ok) return;
         localConfigCache = ensureConfigShape(await res.json());
         
@@ -812,8 +912,8 @@ async function loadStorageDestinations() {
 
     try {
         const [pluginsRes, destsRes] = await Promise.all([
-            fetch('/api/storage-plugins'),
-            fetch('/api/storage-destinations'),
+            fetch(HD_API_BASE + '/api/storage-plugins'),
+            fetch(HD_API_BASE + '/api/storage-destinations'),
         ]);
         const plugins = await pluginsRes.json();
         const destsData = await destsRes.json();
@@ -1009,7 +1109,7 @@ async function saveStorageDestination() {
     }
 
     try {
-        const res = await fetch('/api/storage-destinations', {
+        const res = await fetch(HD_API_BASE + '/api/storage-destinations', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -1036,7 +1136,7 @@ async function saveStorageDestination() {
 
 async function editStorageDestination(destId) {
     try {
-        const res = await fetch('/api/storage-destinations');
+        const res = await fetch(HD_API_BASE + '/api/storage-destinations');
         const data = await res.json();
         const dest = (data.storage_destinations || []).find(d => d.id === destId);
         if (dest) openStorageDestModal(dest);
@@ -1145,7 +1245,7 @@ async function saveConfigToServer() {
         },
     };
     try {
-        const res = await fetch('/api/config', {
+        const res = await fetch(HD_API_BASE + '/api/config', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify(payload)
@@ -1175,7 +1275,7 @@ async function triggerDiscovery() {
     list.innerHTML = '<li class="text-sm p-4 text-slate-500 italic text-center animate-pulse">Scanning local subnet structure for active HyperDeck control slots...</li>';
     
     try {
-        const res = await fetch('/api/discover');
+        const res = await fetch(HD_API_BASE + '/api/discover');
         const data = await res.json();
         document.getElementById('discovery-subnet').innerText = `Scan Profile Target Base Range: ${data.subnet_scanned}`;
 
@@ -1199,7 +1299,7 @@ async function triggerDiscovery() {
                         <span class="font-mono font-medium">${escHtml(ip)}</span>
                         ${alreadyAdded ? `<div class="text-[11px] text-emerald-300 mt-0.5">Already added as ${escHtml(existingDeckName)}</div>` : ''}
                     </div>
-                    <button ${alreadyAdded ? 'disabled' : `onclick="addDeckToConfigRow('New_HyperDeck', '${escHtml(ip)}')"`} class="text-xs px-2 py-1 rounded border transition ${alreadyAdded ? 'bg-emerald-600/10 text-emerald-300 border-emerald-500/30 cursor-not-allowed' : 'bg-indigo-600/30 text-indigo-400 border-indigo-500/30 hover:bg-indigo-600 hover:text-white cursor-pointer'}">
+                    <button ${alreadyAdded ? 'disabled' : `onclick="addDeckToConfigRow('New_HyperDeck', '${escAttr(ip)}')"`} class="text-xs px-2 py-1 rounded border transition ${alreadyAdded ? 'bg-emerald-600/10 text-emerald-300 border-emerald-500/30 cursor-not-allowed' : 'bg-indigo-600/30 text-indigo-400 border-indigo-500/30 hover:bg-indigo-600 hover:text-white cursor-pointer'}">
                         ${alreadyAdded ? 'Already Added' : '+ Add to System'}
                     </button>
                 `;
@@ -1260,7 +1360,7 @@ async function navigateFolder(targetPath = "") {
             const nestedFullPath = `${data.current_path.endsWith('/') || data.current_path.endsWith('\\') ? data.current_path : data.current_path + '/'}${dirName}`;
             li.className = "flex justify-between items-center py-2 px-3 hover:bg-slate-900 text-slate-300 transition group rounded";
             li.innerHTML = `
-                <button onclick="navigateFolder('${escHtml(nestedFullPath.replace(/\\/g, '\\\\'))}')" class="text-left w-full flex items-center gap-2 font-medium hover:text-white cursor-pointer truncate">
+                <button onclick="navigateFolder('${escAttr(nestedFullPath.replace(/\\/g, '\\\\'))}')" class="text-left w-full flex items-center gap-2 font-medium hover:text-white cursor-pointer truncate">
                     <span>📁</span> <span class="truncate">${escHtml(dirName)}</span>
                 </button>
             `;
@@ -1282,7 +1382,7 @@ function renderQuickAccessSidebar() {
     const list = document.getElementById('modal-quick-access');
     if (!list) return;
     list.innerHTML = '<li class="text-slate-500 text-[10px] px-2 py-1">Loading...</li>';
-    fetch('/api/browse/roots').then(r => r.json()).then(data => {
+    fetch(HD_API_BASE + '/api/browse/roots').then(r => r.json()).then(data => {
         list.innerHTML = '';
         const roots = data.roots || [];
         roots.forEach(root => {
@@ -1330,7 +1430,7 @@ function updateLiveStagingHUD(id, title) {
 
 async function selectActiveEventContext(id, plannedTitle) {
     try {
-        const response = await fetch('/api/schedule/active', {
+        const response = await fetch(HD_API_BASE + '/api/schedule/active', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({ id: id, planned_title: plannedTitle })
@@ -1455,6 +1555,78 @@ function createScheduleRowElement(item = { id: '', planned_title: '' }) {
         <div class="mt-2 flex items-center gap-1.5">
             <span class="text-[10px] ${inScope ? 'text-emerald-300' : 'text-slate-500'}">${inScope ? 'IN SCOPE' : 'OUT OF SCOPE'}</span>
         </div>
+        <div class="mt-1.5 wp-stream-toggle" style="display:none">
+            <button type="button" onclick="toggleEventStreamFields(this)" class="text-[10px] text-slate-400 hover:text-slate-200 font-medium cursor-pointer">Stream Settings</button>
+            <div class="sch-stream-fields hidden mt-2 grid grid-cols-3 gap-2">
+                <label class="text-[10px] text-slate-400 space-y-1">
+                    <span class="block">Protocol</span>
+                    <select onchange="wpOnRowProtocolChanged(this)" class="sch-protocol block w-full rounded border border-slate-800 bg-slate-950 text-[11px] px-2 py-1 text-slate-200 focus:outline-none">
+                        <option value="rtmp" ${item.protocol === 'rtmp' || !item.protocol ? 'selected' : ''}>RTMP</option>
+                        <option value="srt" ${item.protocol === 'srt' ? 'selected' : ''}>SRT</option>
+                    </select>
+                </label>
+                <label class="text-[10px] text-slate-400 space-y-1">
+                    <span class="block">Quality</span>
+                    <select class="sch-quality block w-full rounded border border-slate-800 bg-slate-950 text-[11px] px-2 py-1 text-slate-200 focus:outline-none">
+                        <option value="Streaming High" ${item.quality === 'Streaming High' ? 'selected' : ''}>Streaming High</option>
+                        <option value="Streaming Medium" ${item.quality === 'Streaming Medium' || !item.quality ? 'selected' : ''}>Streaming Medium</option>
+                        <option value="Streaming Low" ${item.quality === 'Streaming Low' ? 'selected' : ''}>Streaming Low</option>
+                        <option value="HyperDeck High" ${item.quality === 'HyperDeck High' ? 'selected' : ''}>HyperDeck High</option>
+                        <option value="HyperDeck Medium" ${item.quality === 'HyperDeck Medium' ? 'selected' : ''}>HyperDeck Medium</option>
+                        <option value="HyperDeck Low" ${item.quality === 'HyperDeck Low' ? 'selected' : ''}>HyperDeck Low</option>
+                    </select>
+                </label>
+                <label class="text-[10px] text-slate-400 space-y-1">
+                    <span class="block">Video Mode</span>
+                    <select class="sch-video-mode block w-full rounded border border-slate-800 bg-slate-950 text-[11px] px-2 py-1 text-slate-200 focus:outline-none">
+                        <option value="Auto" ${item.video_mode === 'Auto' || !item.video_mode ? 'selected' : ''}>Auto</option>
+                        <option value="1080p59.94" ${item.video_mode === '1080p59.94' ? 'selected' : ''}>1080p59.94</option>
+                        <option value="1080p50" ${item.video_mode === '1080p50' ? 'selected' : ''}>1080p50</option>
+                        <option value="1080p30" ${item.video_mode === '1080p30' ? 'selected' : ''}>1080p30</option>
+                        <option value="720p60" ${item.video_mode === '720p60' ? 'selected' : ''}>720p60</option>
+                    </select>
+                </label>
+                <label class="text-[10px] text-slate-400 space-y-1 ${(item.protocol || 'rtmp') === 'srt' ? 'hidden' : ''}">
+                    <span class="block">Primary URL</span>
+                    <input type="text" value="${escAttr(item.primary_url || '')}" placeholder="rtmp://..." class="sch-primary-url block w-full rounded border border-slate-800 bg-slate-950 text-[11px] px-2 py-1 text-slate-200 focus:outline-none font-mono">
+                </label>
+                <label class="text-[10px] text-slate-400 space-y-1 ${(item.protocol || 'rtmp') === 'srt' ? 'hidden' : ''}">
+                    <span class="block">Primary Key</span>
+                    <input type="password" value="${escAttr(item.primary_key || '')}" placeholder="stream-key" class="sch-primary-key block w-full rounded border border-slate-800 bg-slate-950 text-[11px] px-2 py-1 text-slate-200 focus:outline-none font-mono">
+                </label>
+                <label class="text-[10px] text-slate-400 space-y-1 ${(item.protocol || 'rtmp') === 'srt' ? 'hidden' : ''}">
+                    <span class="block">Backup URL</span>
+                    <input type="text" value="${escAttr(item.backup_url || '')}" placeholder="rtmp://..." class="sch-backup-url block w-full rounded border border-slate-800 bg-slate-950 text-[11px] px-2 py-1 text-slate-200 focus:outline-none font-mono">
+                </label>
+                <label class="text-[10px] text-slate-400 space-y-1 ${(item.protocol || 'rtmp') === 'srt' ? 'hidden' : ''}">
+                    <span class="block">Backup Key</span>
+                    <input type="password" value="${escAttr(item.backup_key || '')}" placeholder="stream-key" class="sch-backup-key block w-full rounded border border-slate-800 bg-slate-950 text-[11px] px-2 py-1 text-slate-200 focus:outline-none font-mono">
+                </label>
+                <label class="text-[10px] text-slate-400 space-y-1 ${(item.protocol || 'rtmp') === 'rtmp' ? 'hidden' : ''}">
+                    <span class="block">SRT Primary</span>
+                    <input type="text" value="${escAttr(item.primary_url || '')}" placeholder="srt://host:port?streamid=..." class="sch-srt-primary block w-full rounded border border-slate-800 bg-slate-950 text-[11px] px-2 py-1 text-slate-200 focus:outline-none font-mono">
+                </label>
+                <label class="text-[10px] text-slate-400 space-y-1 ${(item.protocol || 'rtmp') === 'rtmp' ? 'hidden' : ''}">
+                    <span class="block">SRT Passphrase</span>
+                    <input type="password" value="${escAttr(item.primary_key || '')}" placeholder="optional" class="sch-srt-passphrase block w-full rounded border border-slate-800 bg-slate-950 text-[11px] px-2 py-1 text-slate-200 focus:outline-none font-mono">
+                </label>
+                <label class="text-[10px] text-slate-400 space-y-1 ${(item.protocol || 'rtmp') === 'rtmp' ? 'hidden' : ''}">
+                    <span class="block">SRT Backup</span>
+                    <input type="text" value="${escAttr(item.backup_url || '')}" placeholder="srt://host:port?streamid=..." class="sch-srt-backup block w-full rounded border border-slate-800 bg-slate-950 text-[11px] px-2 py-1 text-slate-200 focus:outline-none font-mono">
+                </label>
+                <label class="text-[10px] text-slate-400 space-y-1 ${(item.protocol || 'rtmp') === 'rtmp' ? 'hidden' : ''}">
+                    <span class="block">SRT Backup Passphrase</span>
+                    <input type="password" value="${escAttr(item.backup_key || '')}" placeholder="optional" class="sch-srt-backup-passphrase block w-full rounded border border-slate-800 bg-slate-950 text-[11px] px-2 py-1 text-slate-200 focus:outline-none font-mono">
+                </label>
+                <label class="text-[10px] text-slate-400 space-y-1">
+                    <span class="block">Stream Profile</span>
+                    <select onchange="wpOnRowProfileChanged(this)" class="sch-stream-profile block w-full rounded border border-slate-800 bg-slate-950 text-[11px] px-2 py-1 text-slate-200 focus:outline-none">
+                        <option value="">None</option>
+                        ${item.stream_profile ? `<option value="${escAttr(item.stream_profile)}" selected>${escHtml(item.stream_profile)}</option>` : ''}
+                    </select>
+                </label>
+            </div>
+        </div>
         <div class="mt-1.5 flex justify-between items-center text-[10px]">
             <button onclick="selectActiveFromRow(this)" class="text-indigo-400 hover:text-indigo-300 font-medium cursor-pointer">Set Active</button>
             ${isActive ? '<span class="rounded bg-indigo-600/30 px-1.5 py-0.5 text-indigo-300">LIVE</span>' : ''}
@@ -1544,14 +1716,24 @@ async function saveScheduleFromMatrix() {
                 const safeTitle = (plannedTitle || `event_${idx + 1}`).replace(/\s+/g, '_').replace(/[^\w\-]/g, '').toLowerCase();
                 id = `${start_time}_${safeTitle}`;
             }
-            return { _row_key: stableKey, id, planned_title: plannedTitle, start_time, stage, slate_metadata };
+            return {
+                _row_key: stableKey, id, planned_title: plannedTitle, start_time, stage, slate_metadata,
+                protocol: row.protocol || 'rtmp',
+                quality: row.quality || '',
+                video_mode: row.video_mode || '',
+                primary_url: row.primary_url || '',
+                primary_key: row.primary_key || '',
+                backup_url: row.backup_url || '',
+                backup_key: row.backup_key || '',
+                stream_profile: row.stream_profile || '',
+            };
         })
         .filter(row => row.id || row.planned_title || row.start_time);
 
     scheduleDataCache = normalizedRows;
     const payload = normalizedRows.map(({ id, planned_title, start_time, stage, slate_metadata }) => ({ id, planned_title, start_time, stage, slate_metadata }));
 
-    await fetch('/api/schedule', {
+    await fetch(HD_API_BASE + '/api/schedule', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -1581,6 +1763,27 @@ function requestScheduleSaveDebounced() {
             const syncStatus = document.getElementById('plugin-sync-status');
             syncStatus.innerText = 'Schedule autosave failed. Use Save Schedule Changes.';
         }
+    }, 700);
+}
+
+let wpScheduleSaveDebounceTimer = null;
+
+function requestWpScheduleSaveDebounced() {
+    if (wpScheduleSaveDebounceTimer) {
+        clearTimeout(wpScheduleSaveDebounceTimer);
+    }
+
+    wpScheduleSaveDebounceTimer = setTimeout(async () => {
+        wpScheduleSaveDebounceTimer = null;
+        try {
+            mergeVisibleRowsIntoCache();
+            const url = HD_API_BASE ? `${HD_API_BASE}/api/schedule` : '/api/schedule';
+            await fetch(url, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(scheduleDataCache),
+            });
+        } catch (_) {}
     }, 700);
 }
 
@@ -1645,7 +1848,7 @@ async function triggerPluginSync() {
             return;
         }
 
-        const scheduleRes = await fetch('/api/schedule');
+        const scheduleRes = await fetch(HD_API_BASE + '/api/schedule');
         const schedule = await scheduleRes.json();
         renderScheduleMatrix(schedule);
 
@@ -1697,7 +1900,7 @@ async function uploadScheduleFile() {
             return;
         }
 
-        const scheduleRes = await fetch('/api/schedule');
+        const scheduleRes = await fetch(HD_API_BASE + '/api/schedule');
         const schedule = await scheduleRes.json();
         renderScheduleMatrix(schedule);
         uploadStatus.innerText = `Upload complete. ${Array.isArray(schedule) ? schedule.length : 0} rows loaded.`;
@@ -1711,7 +1914,7 @@ async function uploadScheduleFile() {
 
 async function clearScheduleForManualMode() {
     scheduleDataCache = [];
-    await fetch('/api/schedule', {
+    await fetch(HD_API_BASE + '/api/schedule', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify([])
@@ -2008,14 +2211,14 @@ function filterDeckSettingsByScope(settings) {
 
 // --- Shared Settings Groups API helpers ---
 async function _fetchSettingsGroups() {
-    const res = await fetch('/api/control/settings-groups');
+    const res = await fetch(HD_API_BASE + '/api/control/settings-groups');
     if (!res.ok) return {};
     const data = await res.json();
     return (data && typeof data.groups === 'object' && data.groups) ? data.groups : {};
 }
 
 async function _saveSettingsGroup(name, targets, settings, field_keys) {
-    const res = await fetch('/api/control/settings-groups', {
+    const res = await fetch(HD_API_BASE + '/api/control/settings-groups', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, targets, settings, field_keys }),
@@ -2091,7 +2294,7 @@ async function applyDeckSettingsToSelectedTargets() {
 
     if (statusEl) statusEl.innerText = `Applying ${Object.keys(settings).length} setting(s) to ${targets.length} deck(s)...`;
     try {
-        const res = await fetch('/api/control/apply-settings', {
+        const res = await fetch(HD_API_BASE + '/api/control/apply-settings', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ targets, settings }),
@@ -2557,7 +2760,7 @@ async function applySettingsGroupsDraftToSelected() {
     }
 
     try {
-        const res = await fetch('/api/control/apply-settings', {
+        const res = await fetch(HD_API_BASE + '/api/control/apply-settings', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ targets, settings: scopedSettings }),
@@ -3732,12 +3935,44 @@ Object.assign(window, {
     applyDeckSettingsGroup,
     deleteDeckSettingsGroup,
     loadDeckSettingsDebug,
+    switchAppTab,
+    wpStartAll,
+    wpStopAll,
+    wpStreamStart,
+    wpStreamStop,
+    openWpPresenterModal,
+    wpRemovePresenter,
+    wpDiscover,
+    wpOpenSettings,
+    wpFetchKeys,
+    wpStageEvent,
+    wpAddEvent,
+    wpSaveSchedule,
+    wpFilterSchedule,
+    wpLoadActiveToForm,
+    wpSaveStreamConfig,
+    wpPushToTarget,
+    wpApplyConfigToAllEvents,
+    wpApplyProfileToAllEvents,
+    wpOnPushTargetChanged,
+    wpOnProtocolChanged,
+    wpSaveAsProfile,
+    wpEditProfile,
+    wpApplyProfile,
+    wpDeleteProfile,
+    wpTriggerPluginSync,
+    wpUploadScheduleFile,
+    wpClearActiveEvent,
+    closeWpPresenterModal,
+    saveWpPresenter,
+    closeWpSettings,
+    closeGuideModal,
 });
 
 // Update your primary load sequence to populate the HUD card on application bootup
 async function loadPluginManagerSystem() {
     try {
-        const pluginRes = await fetch('/api/plugins');
+        const pluginRes = await fetch(HD_API_BASE + '/api/plugins');
         const plugins = await pluginRes.json();
         availablePlugins = Array.isArray(plugins) ? plugins : [];
         const selector = document.getElementById('plugin-selector');
@@ -3787,7 +4022,7 @@ async function loadPluginManagerSystem() {
         scheduleFilterMode = scopeFilter.value;
 
         const scheduleContainer = document.getElementById('schedule-matrix-container');
-        if (!scheduleContainer.dataset.bound) {
+        if (scheduleContainer && !scheduleContainer.dataset.bound) {
             scheduleContainer.addEventListener('input', (event) => {
                 const target = event.target;
                 if (!(target instanceof HTMLElement)) return;
@@ -3810,13 +4045,38 @@ async function loadPluginManagerSystem() {
             scheduleContainer.dataset.bound = 'true';
         }
 
+        // Also bind auto-save to WP schedule matrix
+        const wpScheduleContainer = document.getElementById('wp-schedule-matrix');
+        if (wpScheduleContainer && !wpScheduleContainer.dataset.bound) {
+            wpScheduleContainer.addEventListener('input', (event) => {
+                const target = event.target;
+                if (!(target instanceof HTMLElement)) return;
+                if (target.closest('.schedule-row-item')) {
+                    if (target.classList.contains('sch-date') || target.classList.contains('sch-time')) {
+                        return;
+                    }
+                    mergeVisibleRowsIntoCache();
+                    requestWpScheduleSaveDebounced();
+                }
+            });
+            wpScheduleContainer.addEventListener('change', (event) => {
+                const target = event.target;
+                if (!(target instanceof HTMLElement)) return;
+                if (target.closest('.schedule-row-item')) {
+                    mergeVisibleRowsIntoCache();
+                    requestWpScheduleSaveDebounced();
+                }
+            });
+            wpScheduleContainer.dataset.bound = 'true';
+        }
+
         // Pull active server token state and force updates to HUD card
-        const activeContextRes = await fetch('/api/schedule/active');
+        const activeContextRes = await fetch(HD_API_BASE + '/api/schedule/active');
         const activeContext = await activeContextRes.json();
         globallyActiveEventId = activeContext.id;
         updateLiveStagingHUD(activeContext.id, activeContext.planned_title);
 
-        const dataRes = await fetch('/api/schedule');
+        const dataRes = await fetch(HD_API_BASE + '/api/schedule');
         const schedule = await dataRes.json();
         renderScheduleMatrix(schedule);
     } catch(e) { console.error("Could not synchronize core schedule interface modules: ", e); }
@@ -3829,7 +4089,7 @@ let _eventSource = null;
 
 function _startSSE() {
     if (_eventSource) return;
-    _eventSource = new EventSource('/api/events');
+    _eventSource = new EventSource(HD_API_BASE + '/api/events');
     _eventSource.onmessage = (event) => {
         try {
             const state = JSON.parse(event.data);
@@ -3921,3 +4181,1690 @@ document.addEventListener('drop', (e) => {
     renderScheduleMatrix(scheduleDataCache, true);
     saveScheduleFromMatrix();
 });
+
+// ==================== WEB PRESENTER FUNCTIONS ====================
+
+function switchAppTab(tab) {
+    activeTab = tab;
+    localStorage.setItem('activeTab', tab);
+    document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    document.getElementById(`tab-${tab}`).classList.add('active');
+    document.getElementById(`panel-${tab}`).classList.add('active');
+
+    const title = document.getElementById('app-title');
+    const subtitle = document.getElementById('app-subtitle');
+    const hdControls = document.getElementById('hd-header-controls');
+    const wpControls = document.getElementById('wp-header-controls');
+
+    // Toggle stream settings visibility in schedule rows
+    document.querySelectorAll('.schedule-row-item .wp-stream-toggle').forEach(el => {
+        el.style.display = tab === 'hyperdeck' ? 'none' : '';
+    });
+
+    if (tab === 'webpresenter') {
+        if (title) title.textContent = 'Web Presenter Control Center';
+        if (subtitle) subtitle.textContent = 'Live streaming management for Blackmagic Web Presenters.';
+        if (hdControls) hdControls.classList.add('hidden');
+        if (wpControls) { wpControls.classList.remove('hidden'); wpControls.classList.add('flex'); }
+        loadWpPresenters();
+        wpLoadActiveToForm();
+        loadWpKeyPlugins();
+        loadWpSchedule();
+        loadWpProfiles();
+        wpLoadPluginSelector();
+        wpLoadApplyProfileSelect();
+        wpUpdateStagedEventHud();
+        startWpSse();
+        // Setup push target change handler
+        const pushTarget = document.getElementById('wp-push-target');
+        if (pushTarget && !pushTarget.dataset.bound) {
+            pushTarget.addEventListener('change', wpOnPushTargetChanged);
+            pushTarget.dataset.bound = 'true';
+        }
+    } else {
+        if (title) title.textContent = 'HyperDeck Automation Center';
+        if (subtitle) subtitle.textContent = 'Automated multi-device media capture system.';
+        if (hdControls) { hdControls.classList.remove('hidden'); hdControls.classList.add('flex'); }
+        if (wpControls) wpControls.classList.add('hidden');
+        stopWpSse();
+    }
+}
+
+// --- WP SSE ---
+function startWpSse() {
+    if (wpSseSource) return;
+    if (wpPollInterval) { clearInterval(wpPollInterval); wpPollInterval = null; }
+    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/events` : '/api/wp/events';
+    try {
+        wpSseSource = new EventSource(url);
+        wpSseSource.onmessage = (event) => {
+            wpStateCache = JSON.parse(event.data);
+            renderWpPresenterCards();
+            updateWpGlobalStatus();
+        };
+        wpSseSource.onerror = () => {
+            wpSseSource.close();
+            wpSseSource = null;
+            // Fall back to polling and periodically retry SSE
+            wpPollInterval = setInterval(() => {
+                if (!document.getElementById('panel-webpresenter')?.classList.contains('active')) return;
+                loadWpState();
+                // Try to reconnect SSE every 10 seconds
+                if (!wpSseSource) startWpSse();
+            }, 3000);
+        };
+    } catch (_) {}
+}
+
+function stopWpSse() {
+    if (wpSseSource) { wpSseSource.close(); wpSseSource = null; }
+    if (wpPollInterval) { clearInterval(wpPollInterval); wpPollInterval = null; }
+}
+
+async function loadWpState() {
+    try {
+        const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/state` : '/api/wp/state';
+        const res = await fetch(url);
+        wpStateCache = await res.json();
+        renderWpPresenterCards();
+        updateWpGlobalStatus();
+    } catch (_) {}
+}
+
+// --- WP Presenter Management ---
+async function loadWpPresenters() {
+    try {
+        const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/presenters` : '/api/wp/presenters';
+        const res = await fetch(url);
+        const data = await res.json();
+        wpPresentersConfig = {};
+        (data.presenters || []).forEach(p => { wpPresentersConfig[p.name] = p; });
+        renderWpPresenterCards();
+    } catch (_) {}
+}
+
+function renderWpPresenterCards() {
+    const container = document.getElementById('wp-presenters-container');
+    if (!container) return;
+    const names = Object.keys(wpPresentersConfig);
+    if (names.length === 0) {
+        container.innerHTML = '<div class="text-[11px] text-slate-500 px-2 py-4">No Web Presenters configured. Click "+ Add" to get started.</div>';
+        return;
+    }
+
+    // Get staged event info
+    const activeEvent = typeof globallyActiveEventId !== 'undefined' && globallyActiveEventId && globallyActiveEventId !== 'default'
+        ? scheduleDataCache.find(e => e.id === globallyActiveEventId) : null;
+    const eventTitle = activeEvent ? (activeEvent.planned_title || activeEvent.id || '') : '';
+    const eventPlatform = activeEvent ? (activeEvent.platform || '') : '';
+
+    container.innerHTML = '';
+    names.forEach(name => {
+        const wp = wpPresentersConfig[name];
+        const host = wp.host || '';
+        const role = wp.role || '';
+        const stage = wp.stage || '';
+        const state = wpStateCache[host] || {};
+        const connected = state.connected !== false;
+        const streaming = state.streaming === true;
+        const status = state.status || 'Unknown';
+        const duration = state.duration || '';
+        const bitrate = state.bitrate || '0';
+        const cacheUsed = state.cache_used || 0;
+        const devicePlatform = state.platform || '';
+        const deviceUrl = state.streaming ? (state.platform || '') : '';
+
+        const statusColor = streaming ? 'bg-emerald-500' : (connected ? 'bg-slate-500' : 'bg-rose-500');
+        const cacheColor = cacheUsed > 80 ? 'bg-rose-500' : (cacheUsed > 30 ? 'bg-amber-500' : 'bg-emerald-500');
+
+        const roleBadge = role === 'primary' ? '<span class="text-[9px] px-1.5 py-0.5 rounded bg-emerald-600/20 text-emerald-300 border border-emerald-500/30">PRIMARY</span>'
+            : role === 'backup' ? '<span class="text-[9px] px-1.5 py-0.5 rounded bg-amber-600/20 text-amber-300 border border-amber-500/30">BACKUP</span>'
+            : '';
+        const stageBadge = stage ? `<span class="text-[9px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">${escHtml(stage)}</span>` : '';
+
+        // Event info line
+        let eventInfoHtml = '';
+        if (streaming && devicePlatform) {
+            eventInfoHtml = `<div class="text-[11px] text-emerald-400 mb-2">LIVE: ${escHtml(devicePlatform)}</div>`;
+        } else if (eventTitle) {
+            const pushed = eventPlatform && devicePlatform && eventPlatform === devicePlatform;
+            eventInfoHtml = `<div class="text-[11px] mb-2 ${pushed ? 'text-indigo-400' : 'text-slate-500'}">Next: <span class="text-white">${escHtml(eventTitle)}</span>${pushed ? ' <span class="text-[9px] px-1 py-0.5 rounded bg-indigo-600/20 text-indigo-300">CONFIGURED</span>' : ' <span class="text-[9px] px-1 py-0.5 rounded bg-amber-600/20 text-amber-300">NOT PUSHED</span>'}</div>`;
+        }
+
+        const card = document.createElement('div');
+        card.className = 'rounded-lg border border-slate-800 bg-slate-900 p-4';
+        card.innerHTML = `
+            <div class="flex items-center justify-between mb-3">
+                <div class="flex items-center gap-2 flex-wrap">
+                    <span class="flex h-2.5 w-2.5 rounded-full ${statusColor}"></span>
+                    <span class="text-sm font-medium text-white">${escHtml(name)}</span>
+                    ${roleBadge}
+                    ${stageBadge}
+                    <span class="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">${escHtml(status)}</span>
+                </div>
+                <div class="flex gap-1">
+                    <button onclick="openWpPresenterModal('${escAttr(name)}')" class="text-[10px] bg-slate-800 text-slate-300 border border-slate-700 rounded px-2 py-1 hover:bg-slate-700 transition cursor-pointer">Edit</button>
+                    <button onclick="wpOpenSettings('${escAttr(host)}')" class="text-[10px] bg-slate-800 text-slate-300 border border-slate-700 rounded px-2 py-1 hover:bg-slate-700 transition cursor-pointer">Config</button>
+                    <button onclick="wpRemovePresenter('${escAttr(name)}')" class="text-[10px] bg-rose-600/20 text-rose-300 border border-rose-500/30 rounded px-2 py-1 hover:bg-rose-600 transition cursor-pointer">Del</button>
+                </div>
+            </div>
+            ${eventInfoHtml}
+            <div class="grid grid-cols-2 gap-2 text-[11px] mb-3">
+                <div><span class="text-slate-500">Duration:</span> <span class="text-white">${escHtml(duration)}</span></div>
+                <div><span class="text-slate-500">Bitrate:</span> <span class="text-white">${escHtml(bitrate)} bps</span></div>
+                <div class="col-span-2">
+                    <span class="text-slate-500">Cache:</span>
+                    <div class="wp-cache-bar mt-1 inline-block w-24 align-middle ml-1">
+                        <div class="wp-cache-fill ${cacheColor}" style="width:${cacheUsed}%"></div>
+                    </div>
+                    <span class="text-white ml-1">${cacheUsed}%</span>
+                </div>
+            </div>
+            <div class="flex gap-2">
+                <button onclick="wpStreamStart('${escAttr(host)}')" ${streaming ? 'disabled' : ''} class="flex-1 text-[10px] ${streaming ? 'bg-slate-800 text-slate-600 cursor-not-allowed' : 'bg-red-600/20 text-red-300 border border-red-500/30 hover:bg-red-600 hover:text-white'} rounded px-2 py-1.5 transition cursor-pointer">▶ Stream</button>
+                <button onclick="wpStreamStop('${escAttr(host)}')" ${!streaming ? 'disabled' : ''} class="flex-1 text-[10px] ${!streaming ? 'bg-slate-800 text-slate-600 cursor-not-allowed' : 'bg-red-600/20 text-red-300 border border-red-500/30 hover:bg-red-600 hover:text-white'} rounded px-2 py-1.5 transition cursor-pointer">■ End</button>
+            </div>
+        `;
+        container.appendChild(card);
+    });
+}
+
+function updateWpGlobalStatus() {
+    const el = document.getElementById('wp-global-status');
+    if (!el) return;
+    const states = Object.values(wpStateCache);
+    if (states.length === 0) {
+        el.innerHTML = '<span class="flex h-2.5 w-2.5 rounded-full bg-slate-500"></span><span class="text-slate-400">No devices</span>';
+        return;
+    }
+    const allConnected = states.every(s => s.connected !== false);
+    const anyStreaming = states.some(s => s.streaming === true);
+    const anyHighCache = states.some(s => (s.cache_used || 0) > 30);
+
+    if (!allConnected) {
+        el.innerHTML = '<span class="flex h-2.5 w-2.5 rounded-full bg-rose-500"></span><span class="text-rose-400">Some devices offline</span>';
+    } else if (anyHighCache) {
+        el.innerHTML = '<span class="flex h-2.5 w-2.5 rounded-full bg-amber-500 animate-pulse"></span><span class="text-amber-400">Buffer building</span>';
+    } else if (anyStreaming) {
+        el.innerHTML = '<span class="flex h-2.5 w-2.5 rounded-full bg-emerald-500"></span><span class="text-emerald-400">All healthy — streaming</span>';
+    } else {
+        el.innerHTML = '<span class="flex h-2.5 w-2.5 rounded-full bg-emerald-500"></span><span class="text-emerald-400">All healthy</span>';
+    }
+}
+
+// --- WP Stream Control ---
+async function wpStreamStart(host) {
+    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/stream/start` : '/api/wp/stream/start';
+    try {
+        await fetch(url, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({hosts: [host]}) });
+        setTimeout(loadWpState, 500);
+    } catch (_) { showToast('Failed to start stream', 'error'); }
+}
+
+async function wpStreamStop(host) {
+    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/stream/stop` : '/api/wp/stream/stop';
+    try {
+        await fetch(url, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({hosts: [host]}) });
+        setTimeout(loadWpState, 500);
+    } catch (_) { showToast('Failed to stop stream', 'error'); }
+}
+
+async function wpStartAll() {
+    if (!confirm('Start streaming on ALL Web Presenters?')) return;
+    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/stream/start-all` : '/api/wp/stream/start-all';
+    try {
+        await fetch(url, { method: 'POST' });
+        setTimeout(loadWpState, 500);
+    } catch (_) { showToast('Failed to start streams', 'error'); }
+}
+
+async function wpStopAll() {
+    if (!confirm('Stop streaming on ALL Web Presenters?')) return;
+    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/stream/stop-all` : '/api/wp/stream/stop-all';
+    try {
+        await fetch(url, { method: 'POST' });
+        setTimeout(loadWpState, 500);
+    } catch (_) { showToast('Failed to stop streams', 'error'); }
+}
+
+// --- WP Presenter Config ---
+function openWpPresenterModal(editName) {
+    const modal = document.getElementById('wp-presenter-modal');
+    const title = document.getElementById('wp-presenter-modal-title');
+    const editNameInput = document.getElementById('wp-presenter-edit-name');
+    const nameInput = document.getElementById('wp-presenter-name');
+    const hostInput = document.getElementById('wp-presenter-host');
+    const portInput = document.getElementById('wp-presenter-port');
+    const roleInput = document.getElementById('wp-presenter-role');
+    const stageInput = document.getElementById('wp-presenter-stage');
+
+    if (editName) {
+        title.textContent = 'Edit Web Presenter';
+        editNameInput.value = editName;
+        nameInput.value = editName;
+        const wp = wpPresentersConfig[editName] || {};
+        hostInput.value = wp.host || '';
+        portInput.value = wp.port || 9977;
+        roleInput.value = wp.role || '';
+        stageInput.value = wp.stage || '';
+    } else {
+        title.textContent = 'Add Web Presenter';
+        editNameInput.value = '';
+        nameInput.value = '';
+        hostInput.value = '';
+        portInput.value = 9977;
+        roleInput.value = '';
+        stageInput.value = '';
+    }
+
+    // Populate stage datalist from schedule + presenters
+    const stages = new Set();
+    scheduleDataCache.forEach(e => { if (e.stage) stages.add(e.stage); });
+    Object.values(wpPresentersConfig).forEach(p => { if (p.stage) stages.add(p.stage); });
+    const datalist = document.getElementById('wp-stage-options');
+    datalist.innerHTML = '';
+    stages.forEach(s => { const opt = document.createElement('option'); opt.value = s; datalist.appendChild(opt); });
+
+    modal.classList.remove('hidden');
+}
+
+function closeWpPresenterModal() {
+    document.getElementById('wp-presenter-modal').classList.add('hidden');
+}
+
+async function saveWpPresenter() {
+    const editName = document.getElementById('wp-presenter-edit-name').value;
+    const name = document.getElementById('wp-presenter-name').value.trim();
+    const host = document.getElementById('wp-presenter-host').value.trim();
+    const port = parseInt(document.getElementById('wp-presenter-port').value || '9977', 10);
+    const role = document.getElementById('wp-presenter-role').value;
+    const stage = document.getElementById('wp-presenter-stage').value.trim();
+
+    if (!name) { showToast('Enter a device name', 'warning'); return; }
+    if (!host) { showToast('Enter an IP address', 'warning'); return; }
+
+    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/presenters` : '/api/wp/presenters';
+    try {
+        await fetch(url, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({name, host, port, role, stage}),
+        });
+        closeWpPresenterModal();
+        loadWpPresenters();
+        showToast(editName ? 'Presenter updated' : 'Presenter added', 'success');
+    } catch (_) { showToast('Failed to save presenter', 'error'); }
+}
+
+async function wpRemovePresenter(name) {
+    if (!confirm(`Remove presenter "${name}"?`)) return;
+    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/presenters/${encodeURIComponent(name)}` : `/api/wp/presenters/${encodeURIComponent(name)}`;
+    try {
+        await fetch(url, { method: 'DELETE' });
+        loadWpPresenters();
+        showToast('Presenter removed', 'success');
+    } catch (_) { showToast('Failed to remove presenter', 'error'); }
+}
+
+async function wpDiscover() {
+    showToast('Scanning network for Web Presenters...', 'info');
+    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/discover` : '/api/wp/discover';
+    try {
+        const res = await fetch(url);
+        const data = await res.json();
+        const found = data.found || [];
+        const subnet = data.subnet || '';
+        const scanned = data.scanned || 0;
+        if (found.length === 0) {
+            showToast(`No Web Presenters found in ${subnet} (${scanned} hosts scanned)`, 'info');
+        } else {
+            found.forEach(d => {
+                const name = d.label || d.model || d.ip;
+                if (!wpPresentersConfig[name]) {
+                    const saveUrl = WP_API_BASE ? `${WP_API_BASE}/api/wp/presenters` : '/api/wp/presenters';
+                    fetch(saveUrl, {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({name, host: d.ip}),
+                    });
+                }
+            });
+            loadWpPresenters();
+            showToast(`Found ${found.length} Web Presenter(s) in ${subnet}`, 'success');
+        }
+    } catch (_) { showToast('Discovery failed', 'error'); }
+}
+
+async function wpOpenSettings(host) {
+    const modal = document.getElementById('wp-settings-modal');
+    const hostLabel = document.getElementById('wp-settings-host');
+    const content = document.getElementById('wp-settings-content');
+    hostLabel.textContent = host;
+    content.innerHTML = '<div class="text-slate-500">Loading settings...</div>';
+    modal.classList.remove('hidden');
+
+    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/${host}/settings` : `/api/wp/${host}/settings`;
+    try {
+        const res = await fetch(url);
+        if (!res.ok) {
+            const data = await res.json().catch(() => ({}));
+            content.innerHTML = `<div class="text-rose-400">${escHtml(data.detail || 'Failed to load settings')}</div>`;
+            return;
+        }
+        const data = await res.json();
+        const settings = data.settings || {};
+        const identity = data.identity || {};
+        let html = '';
+
+        if (identity.Model) html += `<div class="flex justify-between"><span class="text-slate-500">Model</span><span class="text-white">${escHtml(identity.Model)}</span></div>`;
+        if (identity.Label) html += `<div class="flex justify-between"><span class="text-slate-500">Label</span><span class="text-white">${escHtml(identity.Label)}</span></div>`;
+
+        html += '<div class="border-t border-slate-800 my-2"></div>';
+
+        const displayKeys = ['Video Mode', 'Current Platform', 'Current Server', 'Current Quality Level', 'Current URL'];
+        displayKeys.forEach(key => {
+            if (settings[key]) {
+                html += `<div class="flex justify-between"><span class="text-slate-500">${escHtml(key)}</span><span class="text-white">${escHtml(settings[key])}</span></div>`;
+            }
+        });
+
+        const listKeys = ['Available Video Modes', 'Available Default Platforms', 'Available Quality Levels'];
+        listKeys.forEach(key => {
+            if (settings[key]) {
+                const items = settings[key].split(',').map(s => s.trim());
+                html += `<div class="mt-2"><span class="text-slate-500 block mb-1">${escHtml(key)}</span><div class="flex flex-wrap gap-1">`;
+                items.forEach(item => { html += `<span class="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-300">${escHtml(item)}</span>`; });
+                html += '</div></div>';
+            }
+        });
+
+        content.innerHTML = html || '<div class="text-slate-500">No settings data returned.</div>';
+    } catch (_) {
+        content.innerHTML = '<div class="text-rose-400">Could not reach device.</div>';
+    }
+}
+
+function closeWpSettings() {
+    document.getElementById('wp-settings-modal').classList.add('hidden');
+}
+
+// --- Stream Platform URL Presets ---
+const STREAM_PLATFORM_PRESETS = {
+    'YouTube': {
+        primary: 'rtmp://a.rtmp.youtube.com/live2',
+        backup: 'rtmp://b.rtmp.youtube.com/live2',
+    },
+    'Twitch': {
+        primary: 'rtmp://live.twitch.tv/app',
+        backup: 'rtmp://live-backup.twitch.tv/app',
+    },
+    'Facebook': {
+        primary: 'rtmps://live-api-s.facebook.com:443/rtmp',
+        backup: '',
+    },
+    'Restream.IO': {
+        primary: 'rtmp://live.restream.io/live',
+        backup: 'rtmp://live-2.restream.io/live',
+    },
+};
+
+// --- Pending Changes Queue for Streaming Devices ---
+let pendingChangesQueue = {};  // host -> settings to apply after stream ends
+
+function wpQueueChangeForHost(host, settings) {
+    pendingChangesQueue[host] = settings;
+}
+
+function wpApplyPendingChanges() {
+    Object.entries(pendingChangesQueue).forEach(([host, settings]) => {
+        const state = wpStateCache[host] || {};
+        if (!state.streaming) {
+            const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/${host}/settings` : `/api/wp/${host}/settings`;
+            fetch(url, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(settings),
+            }).then(res => {
+                if (res.ok) {
+                    delete pendingChangesQueue[host];
+                    showToast(`Settings applied to ${host}`, 'success');
+                }
+            }).catch(() => {
+                // Keep in queue for retry on next cycle
+            });
+        }
+    });
+}
+
+// Check for pending changes every 5 seconds
+setInterval(wpApplyPendingChanges, 5000);
+
+function wpApplyPlatformPreset() {
+    const platform = document.getElementById('wp-cfg-platform').value;
+    const preset = STREAM_PLATFORM_PRESETS[platform];
+    if (!preset) {
+        showToast('No URL preset available for this platform. Enter URLs manually.', 'info');
+        return;
+    }
+    const primaryUrl = document.getElementById('wp-cfg-primary-url');
+    const backupUrl = document.getElementById('wp-cfg-backup-url');
+    if (primaryUrl && preset.primary) primaryUrl.value = preset.primary;
+    if (backupUrl && preset.backup) backupUrl.value = preset.backup;
+    const s = document.getElementById('wp-cfg-status');
+    if (s) { s.textContent = `Applied ${platform} URL preset`; s.className = 'text-[10px] text-emerald-400 mt-2'; }
+}
+
+// --- Profile Selection & Field Locking ---
+let activeProfileName = '';
+
+function wpOnProfileSelected() {
+    const select = document.getElementById('wp-cfg-profile');
+    const profileName = select?.value || '';
+    const editBtn = document.getElementById('btn-wp-edit-profile');
+    const detachBtn = document.getElementById('btn-wp-detach-profile');
+
+    if (!profileName) {
+        wpUnlockFormFields();
+        if (editBtn) editBtn.disabled = true;
+        if (detachBtn) detachBtn.disabled = true;
+        activeProfileName = '';
+        return;
+    }
+
+    // Load profile and fill form
+    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/profiles` : '/api/wp/profiles';
+    fetch(url).then(r => r.json()).then(profiles => {
+        const profile = profiles.find(p => p.name === profileName);
+        if (!profile || !profile.settings) return;
+        const s = profile.settings;
+        document.getElementById('wp-cfg-title').value = s.title || '';
+        document.getElementById('wp-cfg-platform').value = s.platform || 'Custom';
+        document.getElementById('wp-cfg-quality').value = s.quality || 'Streaming Medium';
+        document.getElementById('wp-cfg-video-mode').value = s.video_mode || 'Auto';
+        document.getElementById('wp-cfg-protocol').value = s.protocol || 'rtmp';
+        wpOnProtocolChanged();
+
+        if (s.protocol === 'srt') {
+            document.getElementById('wp-cfg-srt-primary').value = s.srt_primary || '';
+            document.getElementById('wp-cfg-srt-passphrase').value = s.srt_passphrase || '';
+            document.getElementById('wp-cfg-srt-backup').value = s.srt_backup || '';
+            document.getElementById('wp-cfg-srt-backup-passphrase').value = s.srt_backup_passphrase || '';
+        } else {
+            document.getElementById('wp-cfg-primary-url').value = s.primary_url || '';
+            document.getElementById('wp-cfg-primary-key').value = s.primary_key || '';
+            document.getElementById('wp-cfg-backup-url').value = s.backup_url || '';
+            document.getElementById('wp-cfg-backup-key').value = s.backup_key || '';
+        }
+
+        wpLockFormFields();
+        activeProfileName = profileName;
+        if (editBtn) editBtn.disabled = false;
+        if (detachBtn) detachBtn.disabled = false;
+        const status = document.getElementById('wp-cfg-status');
+        if (status) { status.textContent = `Loaded profile: ${profileName}`; status.className = 'text-[10px] text-indigo-400 mt-2'; }
+    }).catch(() => {});
+}
+
+function wpLockFormFields() {
+    const fields = document.querySelectorAll('#wp-cfg-protocol, #wp-cfg-platform, #wp-cfg-quality, #wp-cfg-video-mode, #wp-cfg-primary-url, #wp-cfg-primary-key, #wp-cfg-backup-url, #wp-cfg-backup-key, #wp-cfg-srt-primary, #wp-cfg-srt-passphrase, #wp-cfg-srt-backup, #wp-cfg-srt-backup-passphrase');
+    fields.forEach(f => { f.disabled = true; f.classList.add('opacity-60'); });
+}
+
+function wpUnlockFormFields() {
+    const fields = document.querySelectorAll('#wp-cfg-protocol, #wp-cfg-platform, #wp-cfg-quality, #wp-cfg-video-mode, #wp-cfg-primary-url, #wp-cfg-primary-key, #wp-cfg-backup-url, #wp-cfg-backup-key, #wp-cfg-srt-primary, #wp-cfg-srt-passphrase, #wp-cfg-srt-backup, #wp-cfg-srt-backup-passphrase');
+    fields.forEach(f => { f.disabled = false; f.classList.remove('opacity-60'); });
+}
+
+function wpDetachProfile() {
+    wpUnlockFormFields();
+    activeProfileName = '';
+    const select = document.getElementById('wp-cfg-profile');
+    if (select) select.value = '';
+    const editBtn = document.getElementById('btn-wp-edit-profile');
+    const detachBtn = document.getElementById('btn-wp-detach-profile');
+    if (editBtn) editBtn.disabled = true;
+    if (detachBtn) detachBtn.disabled = true;
+    const status = document.getElementById('wp-cfg-status');
+    if (status) { status.textContent = 'Fields unlocked — editing manually'; status.className = 'text-[10px] text-slate-400 mt-2'; }
+}
+function wpOnProtocolChanged() {
+    const protocol = document.getElementById('wp-cfg-protocol').value;
+    const rtmpFields = document.getElementById('wp-cfg-rtmp-fields');
+    const srtFields = document.getElementById('wp-cfg-srt-fields');
+    if (protocol === 'srt') {
+        rtmpFields.classList.add('hidden');
+        srtFields.classList.remove('hidden');
+    } else {
+        rtmpFields.classList.remove('hidden');
+        srtFields.classList.add('hidden');
+    }
+}
+
+async function wpLoadActiveToForm() {
+    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/active` : '/api/wp/active';
+    try {
+        const res = await fetch(url);
+        const data = await res.json();
+        document.getElementById('wp-cfg-title').value = data.title || data.event_id || '';
+        document.getElementById('wp-cfg-platform').value = data.platform || 'Custom';
+        document.getElementById('wp-cfg-quality').value = data.quality || 'Streaming Medium';
+        document.getElementById('wp-cfg-video-mode').value = data.video_mode || 'Auto';
+
+        const protocol = data.protocol || 'rtmp';
+        document.getElementById('wp-cfg-protocol').value = protocol;
+        wpOnProtocolChanged();
+
+        if (protocol === 'srt') {
+            document.getElementById('wp-cfg-srt-primary').value = data.srt_primary || '';
+            document.getElementById('wp-cfg-srt-passphrase').value = data.srt_passphrase || '';
+            document.getElementById('wp-cfg-srt-backup').value = data.srt_backup || '';
+            document.getElementById('wp-cfg-srt-backup-passphrase').value = data.srt_backup_passphrase || '';
+        } else {
+            document.getElementById('wp-cfg-primary-url').value = data.primary_url || '';
+            document.getElementById('wp-cfg-primary-key').value = data.primary_key || '';
+            document.getElementById('wp-cfg-backup-url').value = data.backup_url || '';
+            document.getElementById('wp-cfg-backup-key').value = data.backup_key || '';
+        }
+
+        // Set profile selector if event has a linked profile
+        const profileSelect = document.getElementById('wp-cfg-profile');
+        if (profileSelect && data.stream_profile) {
+            profileSelect.value = data.stream_profile;
+            wpOnProfileSelected();
+        } else {
+            wpUnlockFormFields();
+            if (profileSelect) profileSelect.value = '';
+        }
+
+        const s = document.getElementById('wp-cfg-status');
+        if (s) { s.textContent = 'Loaded active config'; s.className = 'text-[10px] text-emerald-400 mt-2'; }
+    } catch (_) {
+        const s = document.getElementById('wp-cfg-status');
+        if (s) { s.textContent = 'Failed to load config'; s.className = 'text-[10px] text-rose-400 mt-2'; }
+    }
+}
+
+function wpCollectStreamConfig() {
+    const protocol = document.getElementById('wp-cfg-protocol').value;
+    const config = {
+        title: document.getElementById('wp-cfg-title').value.trim(),
+        platform: document.getElementById('wp-cfg-platform').value,
+        quality: document.getElementById('wp-cfg-quality').value,
+        video_mode: document.getElementById('wp-cfg-video-mode').value,
+        protocol: protocol,
+    };
+
+    if (protocol === 'srt') {
+        config.srt_primary = document.getElementById('wp-cfg-srt-primary').value.trim();
+        config.srt_passphrase = document.getElementById('wp-cfg-srt-passphrase').value.trim();
+        config.srt_backup = document.getElementById('wp-cfg-srt-backup').value.trim();
+        config.srt_backup_passphrase = document.getElementById('wp-cfg-srt-backup-passphrase').value.trim();
+    } else {
+        config.primary_url = document.getElementById('wp-cfg-primary-url').value.trim();
+        config.primary_key = document.getElementById('wp-cfg-primary-key').value.trim();
+        config.backup_url = document.getElementById('wp-cfg-backup-url').value.trim();
+        config.backup_key = document.getElementById('wp-cfg-backup-key').value.trim();
+    }
+    return config;
+}
+
+async function wpSaveStreamConfig() {
+    const config = wpCollectStreamConfig();
+    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/active` : '/api/wp/active';
+    try {
+        await fetch(url, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(config),
+        });
+        const s = document.getElementById('wp-cfg-status');
+        if (s) { s.textContent = 'Saved'; s.className = 'text-[10px] text-emerald-400 mt-2'; }
+        showToast('Stream configuration saved', 'success');
+    } catch (_) {
+        const s = document.getElementById('wp-cfg-status');
+        if (s) { s.textContent = 'Save failed'; s.className = 'text-[10px] text-rose-400 mt-2'; }
+    }
+}
+
+function wpCollectStreamSettings() {
+    const protocol = document.getElementById('wp-cfg-protocol').value;
+    const settings = {};
+    const platform = document.getElementById('wp-cfg-platform').value;
+    const quality = document.getElementById('wp-cfg-quality').value;
+    const videoMode = document.getElementById('wp-cfg-video-mode').value;
+
+    if (videoMode) settings['Video Mode'] = videoMode;
+    if (platform) settings['Current Platform'] = platform;
+    if (quality) settings['Current Quality Level'] = quality;
+
+    if (protocol === 'srt') {
+        const srtPrimary = document.getElementById('wp-cfg-srt-primary').value.trim();
+        const srtPassphrase = document.getElementById('wp-cfg-srt-passphrase').value.trim();
+        if (srtPrimary) settings['Current URL'] = srtPrimary;
+        if (srtPassphrase) settings['Password'] = srtPassphrase;
+        settings['Current Server'] = 'Custom';
+        settings['Current Platform'] = 'Custom URL H.264';
+    } else {
+        if (platform === 'Custom' || platform === 'Custom URL H.264') {
+            settings['Current Server'] = 'Custom';
+            const primaryUrl = document.getElementById('wp-cfg-primary-url').value.trim();
+            if (primaryUrl) settings['Current URL'] = primaryUrl;
+        } else {
+            settings['Current Server'] = 'Primary';
+        }
+        const primaryKey = document.getElementById('wp-cfg-primary-key').value.trim();
+        if (primaryKey) settings['Stream Key'] = primaryKey;
+    }
+
+    return settings;
+}
+
+function setTextIfExists(id, text) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = text;
+}
+
+// --- Stream Profiles ---
+async function loadWpProfiles() {
+    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/profiles` : '/api/wp/profiles';
+    try {
+        const res = await fetch(url);
+        const profiles = await res.json();
+
+        // Update profiles container
+        const container = document.getElementById('wp-profiles-container');
+        if (container) {
+            if (!Array.isArray(profiles) || profiles.length === 0) {
+                container.innerHTML = '<div class="text-slate-500">No profiles saved.</div>';
+            } else {
+                container.innerHTML = '';
+                profiles.forEach(p => {
+                    const row = document.createElement('div');
+                    row.className = 'flex items-center justify-between px-2 py-1.5 rounded hover:bg-slate-800 transition';
+                    const s = p.settings || {};
+                    const desc = [s.platform, s.quality, s.video_mode, s.protocol || 'rtmp'].filter(Boolean).join(' · ');
+                    row.innerHTML = `
+                        <div class="flex-1 min-w-0">
+                            <span class="text-white">${escHtml(p.name)}</span>
+                            <span class="text-[10px] text-slate-500 ml-2">${escHtml(desc)}</span>
+                        </div>
+                        <div class="flex gap-1 ml-2 shrink-0">
+                            <button onclick="wpApplyProfile('${escAttr(p.name)}')" class="text-[10px] bg-indigo-600/20 text-indigo-300 border border-indigo-500/30 rounded px-2 py-1 hover:bg-indigo-600 hover:text-white transition cursor-pointer">Apply</button>
+                            <button onclick="wpEditProfile('${escAttr(p.name)}')" class="text-[10px] bg-slate-800 text-slate-300 border border-slate-700 rounded px-2 py-1 hover:bg-slate-700 hover:text-white transition cursor-pointer">Edit</button>
+                            <button onclick="wpDeleteProfile('${escAttr(p.name)}')" class="text-[10px] bg-rose-600/20 text-rose-300 border border-rose-500/30 rounded px-2 py-1 hover:bg-rose-600 hover:text-white transition cursor-pointer">Del</button>
+                        </div>
+                    `;
+                    container.appendChild(row);
+                });
+            }
+        }
+
+        // Update config profile selector
+        const configSelect = document.getElementById('wp-cfg-profile');
+        if (configSelect) {
+            const currentVal = configSelect.value;
+            configSelect.innerHTML = '<option value="">None (manual)</option>';
+            (Array.isArray(profiles) ? profiles : []).forEach(p => {
+                const opt = document.createElement('option');
+                opt.value = p.name;
+                opt.textContent = p.name;
+                configSelect.appendChild(opt);
+            });
+            configSelect.value = currentVal;
+        }
+    } catch (_) {}
+}
+
+async function wpSaveAsProfile(updateName) {
+    const name = updateName || prompt('Profile name:');
+    if (!name) return;
+    const config = wpCollectStreamConfig();
+    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/profiles` : '/api/wp/profiles';
+    try {
+        await fetch(url, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({name, settings: config}),
+        });
+        loadWpProfiles();
+        wpRefreshAllProfileSelects();
+        showToast(`Profile "${name}" ${updateName ? 'updated' : 'saved'}`, 'success');
+    } catch (_) { showToast('Failed to save profile', 'error'); }
+}
+
+function wpEditProfile(name) {
+    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/profiles` : '/api/wp/profiles';
+    fetch(url).then(r => r.json()).then(profiles => {
+        const profile = profiles.find(p => p.name === name);
+        if (!profile || !profile.settings) { showToast('Profile not found', 'error'); return; }
+        const s = profile.settings;
+        document.getElementById('wp-cfg-title').value = s.title || '';
+        document.getElementById('wp-cfg-platform').value = s.platform || 'Custom';
+        document.getElementById('wp-cfg-quality').value = s.quality || 'Streaming Medium';
+        document.getElementById('wp-cfg-video-mode').value = s.video_mode || 'Auto';
+        document.getElementById('wp-cfg-protocol').value = s.protocol || 'rtmp';
+        wpOnProtocolChanged();
+        if (s.protocol === 'srt') {
+            document.getElementById('wp-cfg-srt-primary').value = s.srt_primary || '';
+            document.getElementById('wp-cfg-srt-passphrase').value = s.srt_passphrase || '';
+            document.getElementById('wp-cfg-srt-backup').value = s.srt_backup || '';
+            document.getElementById('wp-cfg-srt-backup-passphrase').value = s.srt_backup_passphrase || '';
+        } else {
+            document.getElementById('wp-cfg-primary-url').value = s.primary_url || '';
+            document.getElementById('wp-cfg-primary-key').value = s.primary_key || '';
+            document.getElementById('wp-cfg-backup-url').value = s.backup_url || '';
+            document.getElementById('wp-cfg-backup-key').value = s.backup_key || '';
+        }
+        wpUnlockFormFields();
+        activeProfileName = name;
+        const select = document.getElementById('wp-cfg-profile');
+        if (select) select.value = name;
+        const editBtn = document.getElementById('btn-wp-edit-profile');
+        const detachBtn = document.getElementById('btn-wp-detach-profile');
+        if (editBtn) editBtn.disabled = false;
+        if (detachBtn) detachBtn.disabled = false;
+        const status = document.getElementById('wp-cfg-status');
+        if (status) { status.textContent = `Editing: ${name} — modify and click Save to update`; status.className = 'text-[10px] text-amber-400 mt-2'; }
+    }).catch(() => showToast('Failed to load profile', 'error'));
+}
+
+function wpEditCurrentProfile() {
+    if (activeProfileName) wpEditProfile(activeProfileName);
+}
+
+async function wpApplyProfile(name) {
+    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/profiles` : '/api/wp/profiles';
+    try {
+        const res = await fetch(url);
+        const profiles = await res.json();
+        const profile = profiles.find(p => p.name === name);
+        if (!profile || !profile.settings) { showToast('Profile not found', 'error'); return; }
+        const s = profile.settings;
+        document.getElementById('wp-cfg-title').value = s.title || '';
+        document.getElementById('wp-cfg-platform').value = s.platform || 'Custom';
+        document.getElementById('wp-cfg-quality').value = s.quality || 'Streaming Medium';
+        document.getElementById('wp-cfg-video-mode').value = s.video_mode || 'Auto';
+        document.getElementById('wp-cfg-protocol').value = s.protocol || 'rtmp';
+        wpOnProtocolChanged();
+
+        if (s.protocol === 'srt') {
+            document.getElementById('wp-cfg-srt-primary').value = s.srt_primary || '';
+            document.getElementById('wp-cfg-srt-passphrase').value = s.srt_passphrase || '';
+            document.getElementById('wp-cfg-srt-backup').value = s.srt_backup || '';
+            document.getElementById('wp-cfg-srt-backup-passphrase').value = s.srt_backup_passphrase || '';
+        } else {
+            document.getElementById('wp-cfg-primary-url').value = s.primary_url || '';
+            document.getElementById('wp-cfg-primary-key').value = s.primary_key || '';
+            document.getElementById('wp-cfg-backup-url').value = s.backup_url || '';
+            document.getElementById('wp-cfg-backup-key').value = s.backup_key || '';
+        }
+        showToast(`Profile "${name}" applied`, 'success');
+    } catch (_) { showToast('Failed to load profile', 'error'); }
+}
+
+async function wpDeleteProfile(name) {
+    if (!confirm(`Delete profile "${name}"?`)) return;
+    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/profiles/${encodeURIComponent(name)}` : `/api/wp/profiles/${encodeURIComponent(name)}`;
+    try {
+        await fetch(url, {method: 'DELETE'});
+        loadWpProfiles();
+        wpRefreshAllProfileSelects();
+        showToast(`Profile "${name}" deleted`, 'success');
+    } catch (_) { showToast('Failed to delete profile', 'error'); }
+}
+
+// --- WP Key Plugins ---
+async function loadWpKeyPlugins() {
+    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/plugins/keys` : '/api/wp/plugins/keys';
+    try {
+        const res = await fetch(url);
+        wpKeyPlugins = await res.json();
+        const select = document.getElementById('wp-key-plugin-select');
+        if (!select) return;
+        select.innerHTML = '<option value="">Select a key provider...</option>';
+        wpKeyPlugins.forEach(p => {
+            const opt = document.createElement('option');
+            opt.value = p.name;
+            opt.textContent = p.label;
+            select.appendChild(opt);
+        });
+        if (!select.dataset.bound) {
+            select.addEventListener('change', () => {
+                const ytConfig = document.getElementById('wp-youtube-config');
+                if (ytConfig) ytConfig.classList.toggle('hidden', select.value !== 'youtube');
+                if (select.value === 'youtube') loadYoutubeConfig();
+            });
+            select.dataset.bound = 'true';
+        }
+    } catch (_) {}
+}
+
+// --- Apply Settings to All Events ---
+function wpLoadApplyProfileSelect() {
+    const select = document.getElementById('wp-apply-profile-select');
+    if (!select) return;
+    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/profiles` : '/api/wp/profiles';
+    fetch(url).then(r => r.json()).then(profiles => {
+        select.innerHTML = '<option value="">Select a profile...</option>';
+        (Array.isArray(profiles) ? profiles : []).forEach(p => {
+            const opt = document.createElement('option');
+            opt.value = p.name;
+            opt.textContent = p.name;
+            select.appendChild(opt);
+        });
+    }).catch(() => {});
+}
+
+function wpApplyConfigToAllEvents() {
+    const config = wpCollectStreamConfig();
+    if (!confirm(`Apply current stream settings to ALL ${scheduleDataCache.length} events?`)) return;
+
+    mergeVisibleRowsIntoCache();
+        scheduleDataCache.forEach(item => {
+            item.protocol = config.protocol || 'rtmp';
+            item.quality = config.quality || '';
+            item.video_mode = config.video_mode || '';
+        if (config.protocol === 'srt') {
+            item.primary_url = config.srt_primary || '';
+            item.primary_key = config.srt_passphrase || '';
+            item.backup_url = config.srt_backup || '';
+            item.backup_key = config.srt_backup_passphrase || '';
+        } else {
+            item.primary_url = config.primary_url || '';
+            item.primary_key = config.primary_key || '';
+            item.backup_url = config.backup_url || '';
+            item.backup_key = config.backup_key || '';
+        }
+    });
+    wpSaveSchedule();
+    showToast(`Applied settings to ${scheduleDataCache.length} events`, 'success');
+}
+
+function wpApplyProfileToAllEvents() {
+    const select = document.getElementById('wp-apply-profile-select');
+    const name = select?.value;
+    if (!name) { showToast('Select a profile first', 'warning'); return; }
+
+    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/profiles` : '/api/wp/profiles';
+    fetch(url).then(r => r.json()).then(profiles => {
+        const profile = profiles.find(p => p.name === name);
+        if (!profile || !profile.settings) { showToast('Profile not found', 'error'); return; }
+        if (!confirm(`Apply profile "${name}" to ALL ${scheduleDataCache.length} events?`)) return;
+        mergeVisibleRowsIntoCache();
+        const s = profile.settings;
+        scheduleDataCache.forEach(item => {
+            item.protocol = s.protocol || 'rtmp';
+            item.quality = s.quality || '';
+            item.video_mode = s.video_mode || '';
+            if (s.protocol === 'srt') {
+                item.primary_url = s.srt_primary || s.primary_url || '';
+                item.primary_key = s.srt_passphrase || s.primary_key || '';
+                item.backup_url = s.srt_backup || s.backup_url || '';
+                item.backup_key = s.srt_backup_passphrase || s.backup_key || '';
+            } else {
+                item.primary_url = s.primary_url || '';
+                item.primary_key = s.primary_key || '';
+                item.backup_url = s.backup_url || '';
+                item.backup_key = s.backup_key || '';
+            }
+            item.stream_profile = name;
+        });
+        wpSaveSchedule();
+        showToast(`Applied profile "${name}" to ${scheduleDataCache.length} events`, 'success');
+    }).catch(() => showToast('Failed to load profiles', 'error'));
+}
+
+// --- Schedule Row Stream Fields Toggle ---
+function wpOnRowProtocolChanged(selectEl) {
+    const row = selectEl.closest('.schedule-row-item');
+    if (!row) return;
+    const protocol = selectEl.value;
+    const fields = row.querySelector('.sch-stream-fields');
+    if (!fields) return;
+
+    fields.querySelectorAll('label').forEach(label => {
+        const input = label.querySelector('input, select');
+        if (!input) return;
+        const isRtmp = input.classList.contains('sch-primary-url') || input.classList.contains('sch-primary-key') ||
+                        input.classList.contains('sch-backup-url') || input.classList.contains('sch-backup-key');
+        const isSrt = input.classList.contains('sch-srt-primary') || input.classList.contains('sch-srt-passphrase') ||
+                      input.classList.contains('sch-srt-backup') || input.classList.contains('sch-srt-backup-passphrase');
+        if (isRtmp) {
+            label.style.display = protocol === 'srt' ? 'none' : '';
+            label.classList.toggle('hidden', protocol === 'srt');
+        }
+        if (isSrt) {
+            label.style.display = protocol === 'rtmp' ? 'none' : '';
+            label.classList.toggle('hidden', protocol === 'rtmp');
+        }
+    });
+}
+
+function wpOnRowProfileChanged(selectEl) {
+    const row = selectEl.closest('.schedule-row-item');
+    if (!row) return;
+    const profileName = selectEl.value;
+    const fields = row.querySelector('.sch-stream-fields');
+
+    if (!profileName) {
+        if (fields) {
+            fields.querySelectorAll('input:not(.sch-stream-profile), select:not(.sch-stream-profile)').forEach(f => {
+                f.disabled = false;
+                f.classList.remove('opacity-60');
+            });
+        }
+        return;
+    }
+
+    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/profiles` : '/api/wp/profiles';
+    fetch(url).then(r => r.json()).then(profiles => {
+        const profile = profiles.find(p => p.name === profileName);
+        if (!profile || !profile.settings) return;
+        const s = profile.settings;
+
+        const setVal = (cls, val) => { const el = row.querySelector(cls); if (el) el.value = val || ''; };
+
+        setVal('.sch-protocol', s.protocol || 'rtmp');
+        setVal('.sch-quality', s.quality || '');
+        setVal('.sch-video-mode', s.video_mode || '');
+        setVal('.sch-primary-url', s.primary_url || '');
+        setVal('.sch-primary-key', s.primary_key || '');
+        setVal('.sch-backup-url', s.backup_url || '');
+        setVal('.sch-backup-key', s.backup_key || '');
+
+        // Toggle field visibility based on protocol
+        const protocolSelect = row.querySelector('.sch-protocol');
+        if (protocolSelect) wpOnRowProtocolChanged(protocolSelect);
+
+        // Disable stream fields (not the profile dropdown itself)
+        if (fields) {
+            fields.querySelectorAll('input, select').forEach(f => {
+                if (f.classList.contains('sch-stream-profile')) return;
+                f.disabled = true;
+                f.classList.add('opacity-60');
+            });
+        }
+    }).catch(() => {});
+}
+
+// --- Bulk Stream Assignment ---
+function wpOnPushTargetChanged() {
+    const target = document.getElementById('wp-push-target').value;
+    document.getElementById('wp-push-stage-row').classList.toggle('hidden', target !== 'stage');
+    document.getElementById('wp-push-device-row').classList.toggle('hidden', target !== 'device');
+
+    if (target === 'stage') {
+        const stageSelect = document.getElementById('wp-push-stage');
+        const stages = new Set(Object.values(wpPresentersConfig).map(p => p.stage).filter(Boolean));
+        stageSelect.innerHTML = '<option value="">Select stage...</option>';
+        stages.forEach(s => { const opt = document.createElement('option'); opt.value = s; opt.textContent = s; stageSelect.appendChild(opt); });
+    }
+    if (target === 'device') {
+        const deviceSelect = document.getElementById('wp-push-device');
+        deviceSelect.innerHTML = '<option value="">Select device...</option>';
+        Object.keys(wpPresentersConfig).forEach(name => {
+            const opt = document.createElement('option');
+            opt.value = wpPresentersConfig[name].host;
+            opt.textContent = name;
+            deviceSelect.appendChild(opt);
+        });
+    }
+}
+
+async function wpPushToTarget() {
+    const target = document.getElementById('wp-push-target').value;
+    const config = wpCollectStreamConfig();
+    if (Object.keys(config).length === 0) { showToast('Configure stream settings first', 'warning'); return; }
+
+    let devices = [];
+    if (target === 'all') {
+        devices = Object.values(wpPresentersConfig).filter(p => p.host);
+    } else if (target === 'primary') {
+        devices = Object.values(wpPresentersConfig).filter(p => p.role === 'primary' && p.host);
+    } else if (target === 'backup') {
+        devices = Object.values(wpPresentersConfig).filter(p => p.role === 'backup' && p.host);
+    } else if (target === 'stage') {
+        const stage = document.getElementById('wp-push-stage').value;
+        if (!stage) { showToast('Select a stage', 'warning'); return; }
+        devices = Object.values(wpPresentersConfig).filter(p => p.stage === stage && p.host);
+    } else if (target === 'device') {
+        const host = document.getElementById('wp-push-device').value;
+        if (!host) { showToast('Select a device', 'warning'); return; }
+        devices = Object.values(wpPresentersConfig).filter(p => p.host === host);
+    }
+
+    if (devices.length === 0) { showToast('No devices match the selected target', 'warning'); return; }
+    if (!confirm(`Push settings to ${devices.length} device(s)?`)) return;
+
+    let successCount = 0;
+    let queuedCount = 0;
+    for (const device of devices) {
+        const settings = {};
+        if (config.video_mode) settings['Video Mode'] = config.video_mode;
+        if (config.platform) settings['Current Platform'] = config.platform;
+        if (config.quality) settings['Current Quality Level'] = config.quality;
+
+        if (config.protocol === 'srt') {
+            settings['Current Server'] = 'Custom';
+            settings['Current Platform'] = 'Custom URL H.264';
+            if (config.srt_primary) settings['Current URL'] = config.srt_primary;
+            if (config.srt_passphrase) settings['Password'] = config.srt_passphrase;
+        } else {
+            if (device.role === 'backup') {
+                if (config.platform === 'Custom' || config.platform === 'Custom URL H.264') {
+                    settings['Current Server'] = 'Custom';
+                    if (config.backup_url) settings['Current URL'] = config.backup_url;
+                } else {
+                    settings['Current Server'] = 'Secondary';
+                }
+                if (config.backup_key) settings['Stream Key'] = config.backup_key;
+            } else {
+                if (config.platform === 'Custom' || config.platform === 'Custom URL H.264') {
+                    settings['Current Server'] = 'Custom';
+                    if (config.primary_url) settings['Current URL'] = config.primary_url;
+                } else {
+                    settings['Current Server'] = 'Primary';
+                }
+                if (config.primary_key) settings['Stream Key'] = config.primary_key;
+            }
+        }
+
+        // If device is currently streaming, queue changes instead of pushing
+        const state = wpStateCache[device.host] || {};
+        if (state.streaming) {
+            wpQueueChangeForHost(device.host, settings);
+            queuedCount++;
+            continue;
+        }
+
+        try {
+            const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/${device.host}/settings` : `/api/wp/${device.host}/settings`;
+            const res = await fetch(url, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(settings) });
+            if (res.ok) successCount++;
+        } catch (_) {}
+    }
+    let msg = `Pushed to ${successCount} device(s)`;
+    if (queuedCount > 0) msg += `, queued ${queuedCount} (streaming — will apply after stream ends)`;
+    showToast(msg, successCount === devices.length ? 'success' : 'warning');
+}
+
+async function wpFetchKeys() {
+    const select = document.getElementById('wp-key-plugin-select');
+    const status = document.getElementById('wp-key-plugin-status');
+    const pluginName = select?.value;
+    if (!pluginName) { showToast('Select a key provider first', 'warning'); return; }
+
+    if (status) status.textContent = 'Fetching keys...';
+    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/plugins/keys/fetch/${pluginName}` : `/api/wp/plugins/keys/fetch/${pluginName}`;
+    try {
+        const res = await fetch(url, { method: 'POST' });
+        const data = await res.json();
+        if (data.error) {
+            if (status) status.textContent = data.error;
+            return;
+        }
+        const saveUrl = WP_API_BASE ? `${WP_API_BASE}/api/wp/active` : '/api/wp/active';
+        await fetch(saveUrl, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(data),
+        });
+        wpLoadActiveToForm();
+        if (status) status.textContent = `Keys loaded for "${data.primary_url || 'custom'}"`;
+        showToast('Stream keys fetched and applied', 'success');
+    } catch (_) {
+        if (status) status.textContent = 'Failed to fetch keys.';
+    }
+}
+
+// --- WP Active Metadata Schedule Panel ---
+async function wpLoadPluginSelector() {
+    const url = HD_API_BASE ? `${HD_API_BASE}/api/plugins` : '/api/plugins';
+    try {
+        const res = await fetch(url);
+        const plugins = await res.json();
+        const select = document.getElementById('wp-plugin-selector');
+        if (!select) return;
+        select.innerHTML = '<option value="">Manual Entry Only</option>';
+        (Array.isArray(plugins) ? plugins : []).forEach(p => {
+            const opt = document.createElement('option');
+            opt.value = p.name;
+            opt.textContent = p.label || p.name;
+            opt.disabled = p.enabled === false;
+            select.appendChild(opt);
+        });
+        if (!select.dataset.bound) {
+            select.addEventListener('change', () => {
+                const desc = document.getElementById('wp-plugin-description');
+                const syncBtn = document.getElementById('wp-btn-plugin-sync');
+                const uploadPanel = document.getElementById('wp-plugin-upload-panel');
+                const plugin = (typeof availablePlugins !== 'undefined' ? availablePlugins : []).find(pl => pl.name === select.value);
+                if (!select.value) {
+                    if (desc) desc.textContent = 'No plugin selected. Manual schedule editing is active.';
+                    if (syncBtn) { syncBtn.disabled = false; syncBtn.textContent = 'Fetch & Sync Schedule'; }
+                    if (uploadPanel) uploadPanel.classList.add('hidden');
+                } else {
+                    if (desc) desc.textContent = plugin?.description || '';
+                    if (plugin?.supports_upload) {
+                        if (syncBtn) { syncBtn.disabled = true; syncBtn.textContent = 'Use Upload Below'; }
+                        if (uploadPanel) uploadPanel.classList.remove('hidden');
+                    } else {
+                        if (syncBtn) { syncBtn.disabled = false; syncBtn.textContent = 'Fetch & Sync Schedule'; }
+                        if (uploadPanel) uploadPanel.classList.add('hidden');
+                    }
+                }
+            });
+            select.dataset.bound = 'true';
+        }
+    } catch (_) {}
+}
+
+async function wpTriggerPluginSync() {
+    const select = document.getElementById('wp-plugin-selector');
+    const status = document.getElementById('wp-plugin-sync-status');
+    const pluginName = select?.value;
+    if (!pluginName) {
+        showToast('Select a schedule plugin first', 'warning');
+        return;
+    }
+
+    const plugin = (typeof availablePlugins !== 'undefined' ? availablePlugins : []).find(p => p.name === pluginName);
+    if (plugin?.supports_upload) {
+        if (status) status.textContent = 'This plugin requires file upload. Use the upload panel below.';
+        return;
+    }
+
+    if (status) status.textContent = 'Syncing...';
+    const url = HD_API_BASE ? `${HD_API_BASE}/api/plugins/run/${pluginName}` : `/api/plugins/run/${pluginName}`;
+    try {
+        const res = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'});
+        const data = await res.json();
+        if (data.status === 'success') {
+            await loadWpSchedule();
+            if (status) status.textContent = `Last sync: ${data.items_synced || 0} rows loaded from ${pluginName}`;
+            showToast(`Synced ${data.items_synced || 0} events`, 'success');
+        } else {
+            if (status) status.textContent = data.message || 'Sync returned no data';
+        }
+    } catch (_) {
+        if (status) status.textContent = 'Sync failed — is HyperDeck service running?';
+    }
+}
+
+async function wpUploadScheduleFile() {
+    const select = document.getElementById('wp-plugin-selector');
+    const fileInput = document.getElementById('wp-plugin-file-input');
+    const status = document.getElementById('wp-plugin-upload-status');
+    const pluginName = select?.value;
+    if (!pluginName) { showToast('Select a plugin first', 'warning'); return; }
+    if (!fileInput?.files[0]) { showToast('Select a file first', 'warning'); return; }
+
+    if (status) status.textContent = 'Uploading...';
+    const formData = new FormData();
+    formData.append('file', fileInput.files[0]);
+
+    const url = HD_API_BASE ? `${HD_API_BASE}/api/plugins/upload/${pluginName}` : `/api/plugins/upload/${pluginName}`;
+    try {
+        const res = await fetch(url, {method: 'POST', body: formData});
+        const data = await res.json();
+        if (data.status === 'success') {
+            await loadWpSchedule();
+            if (status) status.textContent = `Uploaded: ${data.items_synced || 0} rows loaded`;
+            showToast(`Uploaded ${data.items_synced || 0} events`, 'success');
+        } else {
+            if (status) status.textContent = data.message || 'Upload returned no data';
+        }
+    } catch (_) {
+        if (status) status.textContent = 'Upload failed';
+    }
+}
+
+function wpUpdateStagedEventHud() {
+    const titleEl = document.getElementById('wp-hud-active-title');
+    const idEl = document.getElementById('wp-hud-active-id');
+    const modeEl = document.getElementById('wp-hud-mode-badge');
+    const clearBtn = document.getElementById('wp-btn-clear-context');
+    if (!titleEl) return;
+
+    if (typeof globallyActiveEventId !== 'undefined' && globallyActiveEventId && globallyActiveEventId !== 'default') {
+        const event = scheduleDataCache.find(e => e.id === globallyActiveEventId);
+        if (event) {
+            titleEl.textContent = event.planned_title || event.id || 'Untitled Event';
+            idEl.textContent = event.id || '';
+            if (modeEl) { modeEl.textContent = 'MANUAL'; modeEl.className = 'text-[10px] font-semibold px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30'; }
+            if (clearBtn) clearBtn.classList.remove('hidden');
+        }
+    } else {
+        titleEl.textContent = 'Default (Time & Date Fallback)';
+        idEl.textContent = 'No active event selection';
+        if (modeEl) { modeEl.textContent = 'AUTO'; modeEl.className = 'text-[10px] font-semibold px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'; }
+        if (clearBtn) clearBtn.classList.add('hidden');
+    }
+}
+
+function wpClearActiveEvent() {
+    globallyActiveEventId = 'default';
+    wpUpdateStagedEventHud();
+    const url = HD_API_BASE ? `${HD_API_BASE}/api/schedule/active` : '/api/schedule/active';
+    fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id: ''})});
+}
+
+// --- WP Schedule (uses shared scheduleDataCache) ---
+
+async function loadWpSchedule() {
+    const url = HD_API_BASE ? `${HD_API_BASE}/api/schedule` : '/api/schedule';
+    try {
+        const res = await fetch(url);
+        const data = await res.json();
+        scheduleDataCache = Array.isArray(data) ? data : [];
+        wpFilterSchedule();
+        wpUpdateStageSelectors();
+    } catch (_) {
+        const wpUrl = WP_API_BASE ? `${WP_API_BASE}/api/wp/schedule` : '/api/wp/schedule';
+        try {
+            const res = await fetch(wpUrl);
+            const data = await res.json();
+            scheduleDataCache = Array.isArray(data) ? data : [];
+            wpFilterSchedule();
+            wpUpdateStageSelectors();
+        } catch (_) {}
+    }
+}
+
+function wpUpdateStageSelectors() {
+    const stages = new Set(scheduleDataCache.map(e => e.stage).filter(Boolean));
+    Object.values(wpPresentersConfig).forEach(p => { if (p.stage) stages.add(p.stage); });
+
+    const datalist = document.getElementById('wp-stage-options');
+    if (datalist) {
+        datalist.innerHTML = '';
+        stages.forEach(s => { const opt = document.createElement('option'); opt.value = s; datalist.appendChild(opt); });
+    }
+    const pushStage = document.getElementById('wp-push-stage');
+    if (pushStage && document.getElementById('wp-push-target')?.value === 'stage') {
+        const current = pushStage.value;
+        pushStage.innerHTML = '<option value="">Select stage...</option>';
+        stages.forEach(s => { const opt = document.createElement('option'); opt.value = s; opt.textContent = s; pushStage.appendChild(opt); });
+        pushStage.value = current;
+    }
+}
+function wpFilterSchedule() {
+    const filter = document.getElementById('wp-schedule-filter')?.value || 'all';
+    const container = document.getElementById('wp-schedule-matrix');
+    const counter = document.getElementById('wp-schedule-counter');
+    if (!container) return;
+
+    let filtered = Array.isArray(scheduleDataCache) ? [...scheduleDataCache] : [];
+
+    if (filter === 'in_scope') {
+        filtered = filtered.filter(item => isScheduleItemInScope(item));
+    }
+
+    container.innerHTML = '';
+    if (filtered.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'text-[11px] text-slate-500 italic px-1 py-1';
+        empty.innerText = filter === 'in_scope' ? 'No rows match current stage scope.' : 'No schedule events. Add events or sync from a plugin.';
+        container.appendChild(empty);
+        if (counter) counter.textContent = '0 records';
+        return;
+    }
+
+    if (counter) {
+        if (filter === 'in_scope') {
+            counter.textContent = `${filtered.length}/${scheduleDataCache.length} in scope`;
+        } else {
+            counter.textContent = `${scheduleDataCache.length} records`;
+        }
+    }
+
+    const showStreamSettings = activeTab === 'webpresenter';
+
+    filtered.forEach(item => {
+        const row = createScheduleRowElement(item);
+        container.appendChild(row);
+
+        // Show/hide stream settings based on active tab
+        const toggle = row.querySelector('.wp-stream-toggle');
+        if (toggle) {
+            toggle.style.display = showStreamSettings ? '' : 'none';
+        }
+
+        // Re-expand stream settings if they were open before re-render
+        const key = row.dataset.rowKey;
+        if (showStreamSettings && expandedStreamRows.has(key)) {
+            const fields = row.querySelector('.sch-stream-fields');
+            const btn = Array.from(row.querySelectorAll('button')).find(b => b.textContent.includes('Stream Settings'));
+            if (fields && btn) {
+                fields.style.display = '';
+                fields.classList.remove('hidden');
+                btn.innerText = 'Hide Stream Settings';
+                const select = fields.querySelector('.sch-stream-profile');
+                if (select && select.value) {
+                    loadWpProfilesIntoSelect(select, select.value);
+                    fields.querySelectorAll('input, select').forEach(f => {
+                        if (f.classList.contains('sch-stream-profile')) return;
+                        f.disabled = true;
+                        f.classList.add('opacity-60');
+                    });
+                }
+                const protocolSelect = fields.querySelector('.sch-protocol');
+                if (protocolSelect) wpOnRowProtocolChanged(protocolSelect);
+            }
+        }
+    });
+}
+
+function wpStageEvent(idx) {
+    const item = scheduleDataCache[idx];
+    if (!item) return;
+
+    // Merge any inline edits first
+    mergeVisibleRowsIntoCache();
+    const merged = scheduleDataCache[idx];
+
+    const config = {
+        event_id: merged.id || '',
+        title: merged.planned_title || merged.id || '',
+        primary_url: merged.primary_url || '',
+        primary_key: merged.primary_key || '',
+        backup_url: merged.backup_url || '',
+        backup_key: merged.backup_key || '',
+        quality: merged.quality || '',
+        video_mode: merged.video_mode || '',
+        platform: merged.platform || '',
+        protocol: merged.protocol || 'rtmp',
+        stream_profile: merged.stream_profile || '',
+    };
+
+    if (merged.stream_profile) {
+        wpApplyProfile(merged.stream_profile);
+    }
+
+    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/active` : '/api/wp/active';
+    fetch(url, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(config),
+    }).then(() => {
+        wpLoadActiveToForm();
+        showToast(`Staged: ${merged.planned_title || merged.id || 'event'}`, 'success');
+    }).catch(() => showToast('Failed to stage event', 'error'));
+}
+
+function wpAddEvent() {
+    scheduleDataCache.push({
+        id: `evt_${Date.now()}`,
+        planned_title: '',
+        start_time: '',
+        stage: '',
+        primary_key: '',
+        primary_url: '',
+    });
+    wpFilterSchedule();
+    // Scroll to the new row and focus the title field
+    const container = document.getElementById('wp-schedule-matrix');
+    if (container) {
+        const lastRow = container.lastElementChild;
+        if (lastRow) {
+            lastRow.scrollIntoView({behavior: 'smooth', block: 'end'});
+            const titleInput = lastRow.querySelector('.sch-title');
+            if (titleInput) titleInput.focus();
+        }
+    }
+}
+
+async function wpSaveSchedule() {
+    mergeVisibleRowsIntoCache();
+    const url = HD_API_BASE ? `${HD_API_BASE}/api/schedule` : '/api/schedule';
+    try {
+        await fetch(url, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(scheduleDataCache),
+        });
+        wpFilterSchedule();
+        showToast('Schedule saved', 'success');
+    } catch (_) {
+        const wpUrl = WP_API_BASE ? `${WP_API_BASE}/api/wp/schedule` : '/api/wp/schedule';
+        try {
+            await fetch(wpUrl, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(scheduleDataCache),
+            });
+            wpFilterSchedule();
+            showToast('Schedule saved', 'success');
+        } catch (_) {
+            showToast('Failed to save schedule', 'error');
+        }
+    }
+}
+
+// --- YouTube Config ---
+async function loadYoutubeConfig() {
+    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/plugins/keys/youtube/config` : '/api/wp/plugins/keys/youtube/config';
+    try {
+        const res = await fetch(url);
+        const data = await res.json();
+        document.getElementById('yt-client-id').value = data.client_id || '';
+        document.getElementById('yt-client-secret').value = data.client_secret === '***' ? '' : (data.client_secret || '');
+        const status = document.getElementById('yt-config-status');
+        if (data.configured) {
+            status.textContent = 'Credentials configured — ready to sign in';
+            status.className = 'text-[10px] text-emerald-400';
+        } else {
+            status.textContent = 'Enter Client ID and Secret, then save before signing in';
+            status.className = 'text-[10px] text-slate-500';
+        }
+    } catch (_) {}
+}
+
+async function saveYoutubeConfig() {
+    const clientId = document.getElementById('yt-client-id').value.trim();
+    const clientSecret = document.getElementById('yt-client-secret').value.trim();
+    const status = document.getElementById('yt-config-status');
+
+    if (!clientId || !clientSecret) {
+        showToast('Client ID and Client Secret are required', 'warning');
+        return;
+    }
+
+    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/plugins/keys/youtube/config` : '/api/wp/plugins/keys/youtube/config';
+    try {
+        const res = await fetch(url, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({client_id: clientId, client_secret: clientSecret}),
+        });
+        const data = await res.json();
+        if (data.configured) {
+            status.textContent = 'Credentials saved — ready to sign in';
+            status.className = 'text-[10px] text-emerald-400';
+            showToast('YouTube credentials saved', 'success');
+        }
+    } catch (_) {
+        showToast('Failed to save YouTube credentials', 'error');
+    }
+}
+
+async function youtubeSignIn() {
+    const clientId = document.getElementById('yt-client-id').value.trim();
+    const clientSecret = document.getElementById('yt-client-secret').value.trim();
+    const status = document.getElementById('yt-config-status');
+
+    if (!clientId || !clientSecret) {
+        showToast('Save Client ID and Secret first', 'warning');
+        return;
+    }
+
+    // Save credentials first
+    await saveYoutubeConfig();
+
+    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/plugins/keys/youtube/authorize` : '/api/wp/plugins/keys/youtube/authorize';
+    try {
+        const res = await fetch(url);
+        const data = await res.json();
+        if (data.auth_url) {
+            status.textContent = 'Opening Google sign-in...';
+            status.className = 'text-[10px] text-indigo-400';
+            window.open(data.auth_url, 'youtube_auth', 'width=500,height=600,left=200,top=200');
+        } else {
+            status.textContent = 'Failed to generate auth URL';
+            status.className = 'text-[10px] text-rose-400';
+        }
+    } catch (_) {
+        status.textContent = 'Failed to connect to server';
+        status.className = 'text-[10px] text-rose-400';
+    }
+}
+
+// Listen for OAuth2 callback messages from popup
+window.addEventListener('message', (event) => {
+    if (event.data && event.data.type === 'youtube_auth') {
+        const status = document.getElementById('yt-config-status');
+        if (event.data.success) {
+            if (status) {
+                status.textContent = 'YouTube account connected!';
+                status.className = 'text-[10px] text-emerald-400';
+            }
+            showToast('YouTube account connected successfully', 'success');
+            loadYoutubeConfig();
+        } else {
+            if (status) {
+                status.textContent = 'Authorization failed — try again';
+                status.className = 'text-[10px] text-rose-400';
+            }
+            showToast('YouTube authorization failed', 'error');
+        }
+    }
+});
+
+function showYoutubeSetupGuide() {
+    const title = document.getElementById('guide-modal-title');
+    const content = document.getElementById('guide-modal-content');
+    title.textContent = 'YouTube Live Setup Guide';
+    content.innerHTML = `
+        <div class="space-y-4">
+            <h4 class="font-semibold text-white">Step 1: Create a Google Cloud Project</h4>
+            <ol class="list-decimal list-inside space-y-1 text-slate-400">
+                <li>Go to <a href="https://console.cloud.google.com/" target="_blank" class="text-indigo-400 hover:underline">Google Cloud Console</a></li>
+                <li>Create a new project (e.g. "HyperDeck YouTube Integration")</li>
+                <li>Select the project from the top dropdown</li>
+            </ol>
+
+            <h4 class="font-semibold text-white">Step 2: Enable the YouTube Data API</h4>
+            <ol class="list-decimal list-inside space-y-1 text-slate-400">
+                <li>Go to <strong>APIs & Services > Library</strong></li>
+                <li>Search for "YouTube Data API v3"</li>
+                <li>Click <strong>Enable</strong></li>
+            </ol>
+
+            <h4 class="font-semibold text-white">Step 3: Create OAuth2 Credentials</h4>
+            <ol class="list-decimal list-inside space-y-1 text-slate-400">
+                <li>Go to <strong>APIs & Services > Credentials</strong></li>
+                <li>Click <strong>Create Credentials > OAuth client ID</strong></li>
+                <li>If prompted, configure the OAuth consent screen first:
+                    <ul class="list-disc list-inside ml-4 mt-1 text-slate-500">
+                        <li>User Type: <strong>External</strong></li>
+                        <li>App name: "HyperDeck Tools" (or your choice)</li>
+                        <li>Add your email as test user</li>
+                    </ul>
+                </li>
+                <li>For Application type, select <strong>Web application</strong></li>
+                <li>Name it (e.g. "HyperDeck Web")</li>
+                <li>Under <strong>Authorized redirect URIs</strong>, add:
+                    <div class="bg-slate-950 border border-slate-800 rounded p-2 mt-1 font-mono text-[11px] text-slate-300" id="yt-redirect-uri">Loading...</div>
+                </li>
+                <li>Click <strong>Create</strong></li>
+                <li>Copy the <strong>Client ID</strong> and <strong>Client Secret</strong></li>
+            </ol>
+
+            <h4 class="font-semibold text-white">Step 4: Configure in This App</h4>
+            <ol class="list-decimal list-inside space-y-1 text-slate-400">
+                <li>Paste your <strong>Client ID</strong> and <strong>Client Secret</strong> above</li>
+                <li>Click <strong>Save Credentials</strong></li>
+                <li>Click <strong>Sign in with Google</strong></li>
+                <li>Authorize the app in the Google popup</li>
+                <li>The refresh token is saved automatically</li>
+            </ol>
+
+            <div class="bg-slate-800/50 border border-slate-700 rounded p-3 text-xs text-slate-400">
+                <strong class="text-slate-300">Note:</strong> You need an active YouTube Live broadcast for key fetching to work.
+                Create one in YouTube Studio before clicking Fetch Keys.
+            </div>
+        </div>
+    `;
+    document.getElementById('guide-modal').classList.remove('hidden');
+
+    // Set the redirect URI dynamically
+    const redirectEl = document.getElementById('yt-redirect-uri');
+    if (redirectEl) {
+        const base = WP_API_BASE || '';
+        redirectEl.textContent = `${base}/api/wp/plugins/keys/youtube/callback`;
+    }
+}
+
+function closeGuideModal() {
+    document.getElementById('guide-modal').classList.add('hidden');
+}
+
+// --- Init & Service Detection ---
+async function _detectServices() {
+    const tabEl = document.getElementById('app-tabs');
+    const hdTab = document.getElementById('tab-hyperdeck');
+    const wpTab = document.getElementById('tab-webpresenter');
+
+    // Always show current service's tab
+    if (IS_HD) {
+        hdTab.style.display = '';
+        wpTab.style.display = 'none';
+    } else if (IS_WP) {
+        hdTab.style.display = 'none';
+        wpTab.style.display = '';
+    }
+
+    // Probe the other service
+    if (IS_HD) {
+        // We're on HyperDeck, probe WP
+        try {
+            const res = await fetch(`${WP_API_BASE}/api/wp/state`, {signal: AbortSignal.timeout(2000)});
+            if (res.ok) {
+                servicesAvailable.webpresenter = true;
+                wpTab.style.display = '';
+            }
+        } catch (_) {}
+    } else if (IS_WP) {
+        // We're on WP, probe HyperDeck
+        try {
+            const res = await fetch(`${HD_API_BASE}/api/state`, {signal: AbortSignal.timeout(2000)});
+            if (res.ok) {
+                servicesAvailable.hyperdeck = true;
+                hdTab.style.display = '';
+            }
+        } catch (_) {}
+    }
+
+    // If only one service, hide tab bar
+    const visibleCount = [servicesAvailable.hyperdeck, servicesAvailable.webpresenter].filter(Boolean).length;
+    if (visibleCount <= 1) {
+        tabEl.style.display = 'none';
+    } else {
+        tabEl.style.display = '';
+    }
+
+    // Set default tab and load its data
+    switchAppTab(activeTab);
+
+    // If the other service was detected, preload its data
+    if (IS_HD && servicesAvailable.webpresenter) {
+        loadWpPresenters();
+    } else if (IS_WP && servicesAvailable.hyperdeck) {
+        // HD data loads on demand when tab is clicked
+    }
+}
+
+(function _init() {
+    setTimeout(_detectServices, 200);
+})();

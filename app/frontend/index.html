@@ -6,6 +6,15 @@
     <title>HyperDeck Automation Center</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg">
     <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <style>
+        .tab-btn { padding: 8px 16px; font-size: 14px; font-weight: 500; color: #94a3b8; border-bottom: 2px solid transparent; transition: all 0.15s; cursor: pointer; }
+        .tab-btn:hover { color: #e2e8f0; }
+        .tab-btn.active { color: #fff; border-bottom-color: #6366f1; }
+        .tab-panel { display: none; }
+        .tab-panel.active { display: block; }
+        .wp-cache-bar { height: 6px; border-radius: 3px; background: #1e293b; overflow: hidden; }
+        .wp-cache-fill { height: 100%; border-radius: 3px; transition: width 0.3s; }
+    </style>
 </head>
 <body class="h-full font-sans text-slate-100 antialiased">
     <div class="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
@@ -14,10 +23,10 @@
         <header class="mb-8 border-b border-slate-800 pb-5">
             <div class="flex items-center justify-between">
                 <div>
-                    <h1 class="text-3xl font-bold tracking-tight text-white">HyperDeck Automation Center</h1>
-                    <p class="mt-2 text-sm text-slate-400">Automated multi-device media capture system.</p>
+                    <h1 id="app-title" class="text-3xl font-bold tracking-tight text-white">HyperDeck Automation Center</h1>
+                    <p id="app-subtitle" class="mt-2 text-sm text-slate-400">Automated multi-device media capture system.</p>
                 </div>
-                <div class="flex items-center gap-3">
+                <div id="hd-header-controls" class="flex items-center gap-3">
                     <button onclick="sendCommandToAll('record')" id="btn-record-all" class="rounded-md bg-red-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-red-500 transition cursor-pointer">
                         ⏺ Record All
                     </button>
@@ -31,10 +40,29 @@
                         Scan Network
                     </button>
                 </div>
+                <div id="wp-header-controls" class="hidden items-center gap-3">
+                    <button onclick="wpStartAll()" class="rounded-md bg-red-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-red-500 transition cursor-pointer">
+                        ▶ Start All Streams
+                    </button>
+                    <button onclick="wpStopAll()" class="rounded-md bg-slate-700 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-600 transition cursor-pointer">
+                        ■ Stop All Streams
+                    </button>
+                    <div id="wp-global-status" class="flex items-center gap-2 text-sm">
+                        <span class="flex h-2.5 w-2.5 rounded-full bg-slate-500"></span>
+                        <span class="text-slate-400">No devices</span>
+                    </div>
+                </div>
             </div>
         </header>
 
-        <!-- Main Grid Splitter -->
+        <!-- Tab Navigation -->
+        <nav id="app-tabs" class="flex gap-1 border-b border-slate-800 mb-6 -mx-4 px-4">
+            <button onclick="switchAppTab('hyperdeck')" id="tab-hyperdeck" class="tab-btn active">HyperDeck</button>
+            <button onclick="switchAppTab('webpresenter')" id="tab-webpresenter" class="tab-btn">Web Presenter</button>
+        </nav>
+
+        <!-- HyperDeck Tab Panel -->
+        <div id="panel-hyperdeck" class="tab-panel active">
         <main class="grid grid-cols-1 gap-8 lg:grid-cols-3">
             
             <!-- Real-Time Metrics Column -->
@@ -218,6 +246,306 @@
             </section>
 
         </main>
+        </div><!-- /panel-hyperdeck -->
+
+        <!-- Web Presenter Tab Panel -->
+        <div id="panel-webpresenter" class="tab-panel">
+            <main class="grid grid-cols-1 gap-8 lg:grid-cols-3">
+
+                <!-- Left Column: Device Grid + Schedule -->
+                <section class="lg:col-span-2 space-y-6">
+                    <!-- WP Device Grid -->
+                    <div>
+                        <div class="flex items-center justify-between mb-3">
+                            <h2 class="text-xl font-semibold text-white flex items-center gap-2">
+                                <span class="flex h-3 w-3 rounded-full bg-emerald-500"></span> Web Presenters
+                            </h2>
+                            <div class="flex gap-2">
+                                <button onclick="openWpPresenterModal()" class="text-xs bg-indigo-600/20 text-indigo-300 border border-indigo-500/30 rounded px-2.5 py-1.5 hover:bg-indigo-600 hover:text-white transition cursor-pointer">+ Add</button>
+                                <button onclick="wpDiscover()" class="text-xs bg-slate-800 text-slate-300 border border-slate-700 rounded px-2.5 py-1.5 hover:bg-slate-700 hover:text-white transition cursor-pointer">Scan</button>
+                            </div>
+                        </div>
+                        <div id="wp-presenters-container" class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                            <div class="text-[11px] text-slate-500 px-2 py-4">No Web Presenters configured.</div>
+                        </div>
+                    </div>
+
+                    <!-- Active Metadata Schedule Panel -->
+                    <section class="rounded-lg border border-slate-800 bg-slate-900 p-6 space-y-3">
+                        <div class="sticky top-2 z-20 -mx-2 px-2 py-2 bg-slate-900/95 backdrop-blur border-b border-slate-800">
+                            <div class="flex items-center justify-between">
+                                <label class="block text-sm font-medium text-slate-300">Active Metadata Schedule</label>
+                                <select id="wp-plugin-selector" aria-label="Schedule plugin" class="rounded bg-slate-950 border border-slate-800 text-xs px-2 py-1 text-slate-300 focus:outline-none focus:ring-1 focus:ring-indigo-500">
+                                    <option value="">Manual Entry Only</option>
+                                </select>
+                            </div>
+                        </div>
+                        <p id="wp-plugin-description" class="text-[11px] text-slate-500">No plugin selected. Manual schedule editing is active.</p>
+                        <p class="text-[10px] text-slate-500">Tip: Hover the small ? markers next to field labels for quick hints.</p>
+
+                        <div class="rounded-lg border border-indigo-500/30 bg-indigo-950/20 p-3 shadow-inner">
+                            <div class="flex items-center justify-between mb-1">
+                                <span class="text-[10px] font-bold tracking-wider text-indigo-400 uppercase block">Staged for Next Capture Target</span>
+                                <span id="wp-hud-mode-badge" class="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">AUTO</span>
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <div class="truncate pr-2">
+                                    <div id="wp-hud-active-title" class="text-sm font-semibold text-white truncate">Default (Time & Date Fallback)</div>
+                                    <div id="wp-hud-active-id" class="text-xs font-mono text-slate-400 truncate">No active event selection</div>
+                                </div>
+                                <button onclick="wpClearActiveEvent()" id="wp-btn-clear-context" class="hidden text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 py-1 rounded cursor-pointer transition">
+                                    Reset
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="flex gap-2">
+                            <button id="wp-btn-plugin-sync" onclick="wpTriggerPluginSync()" class="w-full text-center text-xs bg-indigo-600/20 text-indigo-400 border border-indigo-500/30 rounded py-1.5 font-medium hover:bg-indigo-600 hover:text-white transition cursor-pointer">
+                                Fetch & Sync Schedule
+                            </button>
+                        </div>
+                        <div id="wp-plugin-upload-panel" class="hidden rounded border border-slate-800 bg-slate-950 p-2 space-y-2">
+                            <label class="text-[11px] text-slate-400 block">Upload schedule file (.xlsx/.csv)</label>
+                            <div class="flex gap-2 items-center">
+                                <input id="wp-plugin-file-input" type="file" accept=".xlsx,.csv" class="block w-full text-[11px] text-slate-300 file:mr-2 file:rounded file:border-0 file:bg-slate-800 file:px-2 file:py-1 file:text-slate-200">
+                                <button id="wp-btn-plugin-upload" onclick="wpUploadScheduleFile()" class="text-xs bg-indigo-600/20 text-indigo-300 border border-indigo-500/30 rounded px-2.5 py-1.5 hover:bg-indigo-600 hover:text-white transition cursor-pointer">Upload</button>
+                            </div>
+                            <p id="wp-plugin-upload-status" class="text-[11px] text-slate-500">No file uploaded yet.</p>
+                        </div>
+                        <p id="wp-plugin-sync-status" class="text-[11px] text-slate-500">Manual mode active.</p>
+
+                        <div class="rounded border border-slate-800 bg-slate-950 p-2">
+                            <div class="sticky top-0 z-10 bg-slate-950/95 backdrop-blur text-[11px] font-semibold text-slate-400 tracking-wide uppercase px-1 py-1 mb-1.5 flex justify-between border-b border-slate-800">
+                                <span>Dynamic Event Index Mappings</span>
+                                <div class="flex items-center gap-2">
+                                    <select id="wp-schedule-filter" onchange="wpFilterSchedule()" class="rounded bg-slate-900 border border-slate-800 text-[10px] px-1.5 py-0.5 text-slate-300 normal-case focus:outline-none focus:ring-1 focus:ring-indigo-500">
+                                        <option value="all">Show: All</option>
+                                        <option value="in_scope">Show: In Scope</option>
+                                    </select>
+                                    <span id="wp-schedule-counter" class="text-indigo-400 normal-case">0 records</span>
+                                </div>
+                            </div>
+                            <div id="wp-schedule-matrix" class="space-y-1.5 max-h-[34rem] overflow-y-auto pr-1 text-xs font-mono">
+                                <!-- Programmatic rows will feed here dynamically via JS -->
+                            </div>
+                            <div class="mt-2 flex items-center justify-between gap-3">
+                                <button onclick="wpAddEvent()" class="text-[11px] text-slate-400 hover:text-white block font-medium cursor-pointer">+ Append event metadata</button>
+                                <button onclick="wpSaveSchedule()" class="text-[11px] bg-emerald-600/20 text-emerald-300 border border-emerald-500/30 rounded px-2.5 py-1.5 hover:bg-emerald-600 hover:text-white transition cursor-pointer">Save Schedule Changes</button>
+                            </div>
+                        </div>
+                    </section>
+                </section>
+
+                <!-- Right Column: Config Panel -->
+                <section class="space-y-6">
+
+                    <!-- Stream Configuration -->
+                    <div class="rounded-lg border border-slate-800 bg-slate-900 p-5">
+                        <div class="flex items-center justify-between mb-3">
+                            <h3 class="text-sm font-semibold text-slate-300">Stream Configuration</h3>
+                            <div class="flex gap-2">
+                                <button onclick="wpLoadActiveToForm()" class="text-[10px] bg-slate-800 text-slate-300 border border-slate-700 rounded px-2 py-1 hover:bg-slate-700 transition cursor-pointer">Load</button>
+                                <button onclick="wpSaveStreamConfig()" class="text-[10px] bg-emerald-600/20 text-emerald-300 border border-emerald-500/30 rounded px-2 py-1 hover:bg-emerald-600 hover:text-white transition cursor-pointer">Save</button>
+                            </div>
+                        </div>
+                        <div class="space-y-3 text-xs">
+                            <div class="flex gap-2 items-end">
+                                <div class="flex-1">
+                                    <label class="text-slate-500 block mb-1">Load Stream Profile</label>
+                                    <select id="wp-cfg-profile" onchange="wpOnProfileSelected()" class="w-full rounded bg-slate-950 border border-slate-800 px-2 py-1.5 text-slate-300 focus:outline-none">
+                                        <option value="">None (manual)</option>
+                                    </select>
+                                </div>
+                                <button onclick="wpEditCurrentProfile()" id="btn-wp-edit-profile" class="text-[9px] bg-slate-800 text-slate-400 border border-slate-700 rounded px-1.5 py-1.5 hover:bg-slate-700 hover:text-white transition cursor-pointer shrink-0 disabled:opacity-40 disabled:cursor-not-allowed" disabled title="Edit selected profile">Edit</button>
+                                <button onclick="wpDetachProfile()" id="btn-wp-detach-profile" class="text-[9px] bg-slate-800 text-slate-400 border border-slate-700 rounded px-1.5 py-1.5 hover:bg-slate-700 hover:text-white transition cursor-pointer shrink-0 disabled:opacity-40 disabled:cursor-not-allowed" disabled title="Detach profile (make fields editable)">Detach</button>
+                            </div>
+                            <div>
+                                <label class="text-slate-500 block mb-1">Event Title</label>
+                                <input id="wp-cfg-title" type="text" placeholder="Sunday Morning Keynote" class="w-full rounded bg-slate-950 border border-slate-800 px-2 py-1.5 text-slate-300 focus:outline-none font-mono">
+                            </div>
+                            <div class="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label class="text-slate-500 block mb-1">Protocol</label>
+                                    <select id="wp-cfg-protocol" onchange="wpOnProtocolChanged()" class="w-full rounded bg-slate-950 border border-slate-800 px-2 py-1.5 text-slate-300 focus:outline-none">
+                                        <option value="rtmp">RTMP</option>
+                                        <option value="srt">SRT</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="text-slate-500 block mb-1">Platform</label>
+                                    <div class="flex gap-1">
+                                        <select id="wp-cfg-platform" class="flex-1 rounded bg-slate-950 border border-slate-800 px-2 py-1.5 text-slate-300 focus:outline-none">
+                                            <option value="Custom">Custom</option>
+                                            <option value="YouTube">YouTube</option>
+                                            <option value="Twitch">Twitch</option>
+                                            <option value="Facebook">Facebook</option>
+                                            <option value="Restream.IO">Restream.IO</option>
+                                        </select>
+                                        <button onclick="wpApplyPlatformPreset()" class="text-[9px] bg-slate-800 text-slate-400 border border-slate-700 rounded px-1.5 py-1 hover:bg-slate-700 hover:text-white transition cursor-pointer shrink-0" title="Fill URLs from platform preset">Fill</button>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label class="text-slate-500 block mb-1">Quality</label>
+                                    <select id="wp-cfg-quality" class="w-full rounded bg-slate-950 border border-slate-800 px-2 py-1.5 text-slate-300 focus:outline-none">
+                                        <option value="Streaming High">Streaming High</option>
+                                        <option value="Streaming Medium" selected>Streaming Medium</option>
+                                        <option value="Streaming Low">Streaming Low</option>
+                                        <option value="HyperDeck High">HyperDeck High</option>
+                                        <option value="HyperDeck Medium">HyperDeck Medium</option>
+                                        <option value="HyperDeck Low">HyperDeck Low</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="text-slate-500 block mb-1">Video Mode</label>
+                                    <select id="wp-cfg-video-mode" class="w-full rounded bg-slate-950 border border-slate-800 px-2 py-1.5 text-slate-300 focus:outline-none">
+                                        <option value="Auto">Auto</option>
+                                        <option value="1080p59.94">1080p59.94</option>
+                                        <option value="1080p50">1080p50</option>
+                                        <option value="1080p30">1080p30</option>
+                                        <option value="1080p25">1080p25</option>
+                                        <option value="1080p23.98">1080p23.98</option>
+                                        <option value="720p60">720p60</option>
+                                        <option value="720p50">720p50</option>
+                                        <option value="720p30">720p30</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <!-- RTMP fields -->
+                            <div id="wp-cfg-rtmp-fields" class="space-y-3">
+                                <div>
+                                    <label class="text-slate-500 block mb-1">Primary RTMP URL</label>
+                                    <input id="wp-cfg-primary-url" type="text" placeholder="rtmp://a.rtmp.youtube.com/live2" class="w-full rounded bg-slate-950 border border-slate-800 px-2 py-1.5 text-slate-300 focus:outline-none font-mono">
+                                </div>
+                                <div>
+                                    <label class="text-slate-500 block mb-1">Primary Stream Key</label>
+                                    <input id="wp-cfg-primary-key" type="password" placeholder="xxxx-xxxx-xxxx-xxxx" class="w-full rounded bg-slate-950 border border-slate-800 px-2 py-1.5 text-slate-300 focus:outline-none font-mono">
+                                </div>
+                                <div>
+                                    <label class="text-slate-500 block mb-1">Backup RTMP URL</label>
+                                    <input id="wp-cfg-backup-url" type="text" placeholder="rtmp://b.rtmp.youtube.com/live2" class="w-full rounded bg-slate-950 border border-slate-800 px-2 py-1.5 text-slate-300 focus:outline-none font-mono">
+                                </div>
+                                <div>
+                                    <label class="text-slate-500 block mb-1">Backup Stream Key</label>
+                                    <input id="wp-cfg-backup-key" type="password" placeholder="xxxx-xxxx-xxxx-xxxx" class="w-full rounded bg-slate-950 border border-slate-800 px-2 py-1.5 text-slate-300 focus:outline-none font-mono">
+                                </div>
+                            </div>
+                            <!-- SRT fields -->
+                            <div id="wp-cfg-srt-fields" class="space-y-3 hidden">
+                                <div>
+                                    <label class="text-slate-500 block mb-1">SRT Primary Endpoint</label>
+                                    <input id="wp-cfg-srt-primary" type="text" placeholder="srt://host:port?streamid=..." class="w-full rounded bg-slate-950 border border-slate-800 px-2 py-1.5 text-slate-300 focus:outline-none font-mono">
+                                </div>
+                                <div>
+                                    <label class="text-slate-500 block mb-1">SRT Primary Passphrase</label>
+                                    <input id="wp-cfg-srt-passphrase" type="password" placeholder="Optional passphrase" class="w-full rounded bg-slate-950 border border-slate-800 px-2 py-1.5 text-slate-300 focus:outline-none font-mono">
+                                </div>
+                                <div>
+                                    <label class="text-slate-500 block mb-1">SRT Backup Endpoint</label>
+                                    <input id="wp-cfg-srt-backup" type="text" placeholder="srt://host:port?streamid=..." class="w-full rounded bg-slate-950 border border-slate-800 px-2 py-1.5 text-slate-300 focus:outline-none font-mono">
+                                </div>
+                                <div>
+                                    <label class="text-slate-500 block mb-1">SRT Backup Passphrase</label>
+                                    <input id="wp-cfg-srt-backup-passphrase" type="password" placeholder="Optional passphrase" class="w-full rounded bg-slate-950 border border-slate-800 px-2 py-1.5 text-slate-300 focus:outline-none font-mono">
+                                </div>
+                            </div>
+                        </div>
+                        <p id="wp-cfg-status" class="text-[10px] text-slate-500 mt-2"></p>
+                    </div>
+
+                    <!-- Apply Stream Settings to Events -->
+                    <div class="rounded-lg border border-slate-800 bg-slate-900 p-5">
+                        <h3 class="text-sm font-semibold text-slate-300 mb-3">Apply to Schedule Events</h3>
+                        <div class="space-y-2 text-xs">
+                            <button onclick="wpApplyConfigToAllEvents()" class="w-full text-[11px] bg-indigo-600/20 text-indigo-300 border border-indigo-500/30 rounded px-2 py-1.5 hover:bg-indigo-600 hover:text-white transition cursor-pointer">Apply Current Config to All Events</button>
+                            <div class="flex gap-2">
+                                <select id="wp-apply-profile-select" class="flex-1 rounded bg-slate-950 border border-slate-800 text-[11px] px-2 py-1.5 text-slate-300 focus:outline-none">
+                                    <option value="">Select a profile...</option>
+                                </select>
+                                <button onclick="wpApplyProfileToAllEvents()" class="text-[11px] bg-slate-800 text-slate-300 border border-slate-700 rounded px-2.5 py-1.5 hover:bg-slate-700 hover:text-white transition cursor-pointer">Apply Profile</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Bulk Stream Assignment -->
+                    <div class="rounded-lg border border-slate-800 bg-slate-900 p-5">
+                        <h3 class="text-sm font-semibold text-slate-300 mb-3">Push Stream to Devices</h3>
+                        <div class="space-y-3 text-xs">
+                            <div>
+                                <label class="text-slate-500 block mb-1">Assign to</label>
+                                <select id="wp-push-target" class="w-full rounded bg-slate-950 border border-slate-800 px-2 py-1.5 text-slate-300 focus:outline-none">
+                                    <option value="all">All Devices</option>
+                                    <option value="primary">Primary Only</option>
+                                    <option value="backup">Backup Only</option>
+                                    <option value="stage">By Stage...</option>
+                                    <option value="device">Specific Device...</option>
+                                </select>
+                            </div>
+                            <div id="wp-push-stage-row" class="hidden">
+                                <label class="text-slate-500 block mb-1">Stage</label>
+                                <select id="wp-push-stage" class="w-full rounded bg-slate-950 border border-slate-800 px-2 py-1.5 text-slate-300 focus:outline-none">
+                                    <option value="">Select stage...</option>
+                                </select>
+                            </div>
+                            <div id="wp-push-device-row" class="hidden">
+                                <label class="text-slate-500 block mb-1">Device</label>
+                                <select id="wp-push-device" class="w-full rounded bg-slate-950 border border-slate-800 px-2 py-1.5 text-slate-300 focus:outline-none">
+                                    <option value="">Select device...</option>
+                                </select>
+                            </div>
+                            <button onclick="wpPushToTarget()" class="w-full text-[11px] bg-indigo-600/20 text-indigo-300 border border-indigo-500/30 rounded px-2 py-1.5 hover:bg-indigo-600 hover:text-white transition cursor-pointer">Push Current Config to Target</button>
+                        </div>
+                    </div>
+
+                    <!-- Stream Profiles -->
+                    <div class="rounded-lg border border-slate-800 bg-slate-900 p-5">
+                        <div class="flex items-center justify-between mb-3">
+                            <h3 class="text-sm font-semibold text-slate-300">Stream Profiles</h3>
+                            <button onclick="wpSaveAsProfile()" class="text-[10px] bg-indigo-600/20 text-indigo-300 border border-indigo-500/30 rounded px-2 py-1 hover:bg-indigo-600 hover:text-white transition cursor-pointer">Save Current</button>
+                        </div>
+                        <div id="wp-profiles-container" class="space-y-1 text-xs max-h-40 overflow-y-auto">
+                            <div class="text-slate-500">No profiles saved.</div>
+                        </div>
+                    </div>
+
+                    <!-- WP Stream Key Plugins -->
+                    <div class="rounded-lg border border-slate-800 bg-slate-900 p-5">
+                        <h3 class="text-sm font-semibold text-slate-300 mb-3">Stream Key Plugins</h3>
+                        <div class="flex items-center gap-2 mb-3">
+                            <select id="wp-key-plugin-select" class="rounded bg-slate-950 border border-slate-800 text-xs px-2 py-1.5 text-slate-300 focus:outline-none focus:ring-1 focus:ring-indigo-500">
+                                <option value="">Select a key provider...</option>
+                            </select>
+                            <button onclick="wpFetchKeys()" id="btn-wp-fetch-keys" class="text-xs bg-indigo-600/20 text-indigo-300 border border-indigo-500/30 rounded px-2.5 py-1.5 hover:bg-indigo-600 hover:text-white transition cursor-pointer">Fetch</button>
+                        </div>
+                        <p id="wp-key-plugin-status" class="text-[11px] text-slate-500 mb-3"></p>
+
+                    <!-- YouTube Plugin Config -->
+                    <div id="wp-youtube-config" class="hidden border-t border-slate-800 pt-3 mt-3">
+                        <h4 class="text-xs font-semibold text-slate-400 mb-2">YouTube OAuth2 Configuration</h4>
+                        <div class="space-y-2">
+                            <input id="yt-client-id" type="text" placeholder="Client ID" class="w-full rounded bg-slate-950 border border-slate-800 text-[11px] px-2 py-1.5 text-slate-300 focus:outline-none font-mono">
+                            <input id="yt-client-secret" type="password" placeholder="Client Secret" class="w-full rounded bg-slate-950 border border-slate-800 text-[11px] px-2 py-1.5 text-slate-300 focus:outline-none font-mono">
+                            <div class="flex gap-2">
+                                <button onclick="saveYoutubeConfig()" class="text-[11px] bg-indigo-600/20 text-indigo-300 border border-indigo-500/30 rounded px-2.5 py-1.5 hover:bg-indigo-600 hover:text-white transition cursor-pointer">Save Credentials</button>
+                                <button onclick="youtubeSignIn()" id="btn-yt-signin" class="text-[11px] bg-white text-slate-900 font-semibold rounded px-2.5 py-1.5 hover:bg-slate-200 transition cursor-pointer flex items-center gap-1.5">
+                                    <svg viewBox="0 0 24 24" width="14" height="14"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+                                    Sign in with Google
+                                </button>
+                            </div>
+                            <button onclick="showYoutubeSetupGuide()" class="text-[10px] text-slate-500 hover:text-slate-300 transition cursor-pointer">Setup guide for creating OAuth2 credentials</button>
+                            <p id="yt-config-status" class="text-[10px] text-slate-500"></p>
+                        </div>
+                    </div>
+                                <p id="yt-config-status" class="text-[10px] text-slate-500"></p>
+                            </div>
+                        </div>
+                    </div>
+
+                </section>
+            </main>
+        </div><!-- /panel-webpresenter -->
+
     </div>
 
     <!-- Deck Settings Modal -->
@@ -732,6 +1060,84 @@
             <div class="flex justify-end gap-3 border-t border-slate-800 pt-4 mt-4">
                 <button onclick="closeFolderBrowser()" class="px-4 py-2 text-sm text-slate-400 hover:text-white rounded border border-slate-800 cursor-pointer">Cancel</button>
                 <button onclick="selectCurrentFolder()" class="px-4 py-2 text-sm bg-indigo-600 hover:bg-indigo-500 text-white font-semibold rounded shadow cursor-pointer">Choose This Folder</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Web Presenter Settings Modal -->
+    <div id="wp-settings-modal" class="hidden fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+        <div class="bg-slate-900 border border-slate-800 rounded-lg max-w-lg w-full p-6 shadow-2xl">
+            <div class="flex items-center justify-between border-b border-slate-800 pb-4 mb-4">
+                <div>
+                    <h3 class="text-lg font-semibold text-white">Web Presenter Settings</h3>
+                    <p id="wp-settings-host" class="text-xs text-slate-400 font-mono mt-0.5"></p>
+                </div>
+                <button onclick="closeWpSettings()" class="text-slate-400 hover:text-white cursor-pointer text-xl">✕</button>
+            </div>
+            <div id="wp-settings-content" class="space-y-3 text-xs max-h-96 overflow-y-auto">
+                <div class="text-slate-500">Loading settings...</div>
+            </div>
+            <div class="flex justify-end gap-3 border-t border-slate-800 pt-4 mt-4">
+                <button onclick="closeWpSettings()" class="px-4 py-2 text-sm text-slate-400 hover:text-white rounded border border-slate-800 cursor-pointer">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Web Presenter Add/Edit Modal -->
+    <div id="wp-presenter-modal" class="hidden fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+        <div class="bg-slate-900 border border-slate-800 rounded-lg max-w-md w-full p-6 shadow-2xl">
+            <div class="flex items-center justify-between border-b border-slate-800 pb-4 mb-4">
+                <h3 id="wp-presenter-modal-title" class="text-lg font-semibold text-white">Add Web Presenter</h3>
+                <button onclick="closeWpPresenterModal()" class="text-slate-400 hover:text-white cursor-pointer text-xl">✕</button>
+            </div>
+            <div class="space-y-4">
+                <input type="hidden" id="wp-presenter-edit-name" value="">
+                <div>
+                    <label class="block text-xs text-slate-400 mb-1">Device Name</label>
+                    <input id="wp-presenter-name" type="text" placeholder="Web Presenter Main" class="w-full rounded bg-slate-950 border border-slate-800 text-xs px-2 py-1.5 text-slate-300 focus:outline-none font-mono">
+                </div>
+                <div>
+                    <label class="block text-xs text-slate-400 mb-1">IP Address</label>
+                    <input id="wp-presenter-host" type="text" placeholder="192.168.1.150" class="w-full rounded bg-slate-950 border border-slate-800 text-xs px-2 py-1.5 text-slate-300 focus:outline-none font-mono">
+                </div>
+                <div>
+                    <label class="block text-xs text-slate-400 mb-1">Port (optional)</label>
+                    <input id="wp-presenter-port" type="number" value="9977" class="w-full rounded bg-slate-950 border border-slate-800 text-xs px-2 py-1.5 text-slate-300 focus:outline-none font-mono">
+                </div>
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-xs text-slate-400 mb-1">Role</label>
+                        <select id="wp-presenter-role" class="w-full rounded bg-slate-950 border border-slate-800 text-xs px-2 py-1.5 text-slate-300 focus:outline-none">
+                            <option value="">Unassigned</option>
+                            <option value="primary">Primary</option>
+                            <option value="backup">Backup</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-xs text-slate-400 mb-1">Stage</label>
+                        <input id="wp-presenter-stage" type="text" list="wp-stage-options" placeholder="Main Stage" class="w-full rounded bg-slate-950 border border-slate-800 text-xs px-2 py-1.5 text-slate-300 focus:outline-none font-mono">
+                        <datalist id="wp-stage-options"></datalist>
+                    </div>
+                </div>
+            </div>
+            <div class="flex justify-end gap-3 border-t border-slate-800 pt-4 mt-4">
+                <button onclick="closeWpPresenterModal()" class="px-4 py-2 text-sm text-slate-400 hover:text-white rounded border border-slate-800 cursor-pointer">Cancel</button>
+                <button onclick="saveWpPresenter()" class="px-4 py-2 text-sm bg-indigo-600 hover:bg-indigo-500 text-white rounded cursor-pointer">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Guide Modal -->
+    <div id="guide-modal" class="hidden fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+        <div class="bg-slate-900 border border-slate-800 rounded-lg max-w-2xl w-full max-h-[80vh] flex flex-col shadow-2xl">
+            <div class="flex items-center justify-between border-b border-slate-800 px-6 py-4 shrink-0">
+                <h3 id="guide-modal-title" class="text-lg font-semibold text-white">Setup Guide</h3>
+                <button onclick="closeGuideModal()" class="text-slate-400 hover:text-white cursor-pointer text-xl">✕</button>
+            </div>
+            <div id="guide-modal-content" class="flex-1 overflow-y-auto px-6 py-4 text-sm text-slate-300 leading-relaxed">
+            </div>
+            <div class="flex justify-end border-t border-slate-800 px-6 py-3 shrink-0">
+                <button onclick="closeGuideModal()" class="px-4 py-2 text-sm text-slate-400 hover:text-white rounded border border-slate-800 cursor-pointer">Close</button>
             </div>
         </div>
     </div>
