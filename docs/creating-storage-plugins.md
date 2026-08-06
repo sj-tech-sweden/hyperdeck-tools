@@ -40,8 +40,11 @@ app/backend/plugins/
 │   └── gullbrannafestivalen_scraper.py
 └── storage/
     ├── __init__.py
-    ├── local_folder.py
-    └── s3.py
+    ├── smb.py
+    ├── nfs.py
+    ├── s3.py
+    ├── nextcloud.py
+    └── sharepoint.py
 ```
 
 Storage plugins go in `plugins/storage/`. Schedule plugins go in `plugins/metadata/` (see [creating-plugins.md](creating-plugins.md)).

@@ -7,6 +7,7 @@ and unmounting. Requires root/sudo access for mount operations.
 import os
 import shutil
 import subprocess
+import threading
 
 PLUGIN_LABEL = "NFS Share"
 PLUGIN_DESCRIPTION = "Upload files to an NFS share (auto-mount/unmount)"
@@ -24,6 +25,16 @@ PLUGIN_CONFIG_FIELDS = [
     },
     {"key": "subfolder", "label": "Subfolder (optional)", "type": "text", "required": False, "default": ""},
 ]
+
+_mount_locks: dict[str, threading.Lock] = {}
+_mount_locks_guard = threading.Lock()
+
+
+def _get_mount_lock(mount_point: str) -> threading.Lock:
+    with _mount_locks_guard:
+        if mount_point not in _mount_locks:
+            _mount_locks[mount_point] = threading.Lock()
+        return _mount_locks[mount_point]
 
 
 def _is_mounted(mount_point: str) -> bool:
@@ -107,25 +118,27 @@ def send_file(local_path: str, remote_name: str, config: dict) -> bool:
     if not server or not mount_point:
         return False
 
-    mounted_by_us = False
-    try:
-        if not _is_mounted(mount_point):
-            if not _mount_nfs(config):
-                return False
-            mounted_by_us = True
+    mount_lock = _get_mount_lock(mount_point)
+    with mount_lock:
+        mounted_by_us = False
+        try:
+            if not _is_mounted(mount_point):
+                if not _mount_nfs(config):
+                    return False
+                mounted_by_us = True
 
-        subfolder = config.get("subfolder", "").strip()
-        target_dir = os.path.join(mount_point, subfolder) if subfolder else mount_point
-        os.makedirs(target_dir, exist_ok=True)
+            subfolder = config.get("subfolder", "").strip()
+            target_dir = os.path.join(mount_point, subfolder) if subfolder else mount_point
+            os.makedirs(target_dir, exist_ok=True)
 
-        target_path = os.path.join(target_dir, remote_name)
-        shutil.copy2(local_path, target_path)
-        return os.path.exists(target_path)
-    except Exception:
-        return False
-    finally:
-        if mounted_by_us:
-            _umount_nfs(mount_point)
+            target_path = os.path.join(target_dir, remote_name)
+            shutil.copy2(local_path, target_path)
+            return os.path.exists(target_path)
+        except Exception:
+            return False
+        finally:
+            if mounted_by_us:
+                _umount_nfs(mount_point)
 
 
 def test_connection(config: dict) -> dict:
