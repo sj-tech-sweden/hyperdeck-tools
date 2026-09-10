@@ -93,21 +93,20 @@ def send_file(local_path: str, remote_name: str, config: dict) -> bool:
                 logger.warning("Nextcloud MKCOL returned %d for %s", resp.status_code, folder_url)
 
         url = _get_webdav_url(config, remote_name)
-        logger.info("Nextcloud upload: %s -> %s", os.path.basename(local_path), url)
+        file_size = os.path.getsize(local_path)
+        logger.info("Nextcloud upload: %s -> %s (%d bytes)", os.path.basename(local_path), url, file_size)
 
         with open(local_path, "rb") as f:
-            file_data = f.read()
-
-        resp = requests.put(
-            url,
-            auth=(username, password),
-            headers={"Content-Type": "application/octet-stream"},
-            data=file_data,
-            timeout=300,
-        )
+            resp = requests.put(
+                url,
+                auth=(username, password),
+                headers={"Content-Type": "application/octet-stream"},
+                data=f,
+                timeout=300,
+            )
 
         if resp.status_code in (201, 204):
-            logger.info("Nextcloud upload OK: %s (%d bytes)", remote_name, len(file_data))
+            logger.info("Nextcloud upload OK: %s", remote_name)
             return True
 
         if resp.status_code == 401:

@@ -11,7 +11,10 @@ Setup:
 4. For SharePoint app-only: create a client secret
 """
 
+import logging
 import os
+
+logger = logging.getLogger(__name__)
 
 PLUGIN_LABEL = "SharePoint / OneDrive"
 PLUGIN_DESCRIPTION = "Upload files to SharePoint or OneDrive via Microsoft Graph API"
@@ -117,25 +120,25 @@ def send_file(local_path: str, remote_name: str, config: dict) -> bool:
         import requests
 
         with open(local_path, "rb") as f:
-            file_data = f.read()
-
-        resp = requests.put(
-            upload_url,
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/octet-stream",
-            },
-            data=file_data,
-            timeout=300,
+            resp = requests.put(
+                upload_url,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/octet-stream",
+                },
+                data=f,
+                timeout=300,
         )
 
         if resp.status_code in (200, 201):
             return True
 
+        logger.error("SharePoint upload failed: HTTP %d for %s", resp.status_code, upload_url)
         return False
-    except ImportError as e:
-        raise e
-    except Exception:
+    except ImportError:
+        raise
+    except Exception as e:
+        logger.error("SharePoint upload error: %s -> %s: %s", local_path, remote_name, e)
         return False
 
 

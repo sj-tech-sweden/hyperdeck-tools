@@ -1,0 +1,11 @@
+{
+    "title": "Youtube test",
+    "platform": "YouTube",
+    "quality": "Streaming Medium",
+    "video_mode": "Auto",
+    "protocol": "rtmp",
+    "primary_url": "rtmp://a.rtmp.youtube.com/live2",
+    "primary_key": "",
+    "backup_url": "rtmp://b.rtmp.youtube.com/live2",
+    "backup_key": ""
+}

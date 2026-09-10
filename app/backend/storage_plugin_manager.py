@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+import threading
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -13,6 +14,7 @@ STORAGE_PLUGINS_DIR = "app/backend/plugins/storage"
 CONFIG_FILE = "app/backend/config.json"
 
 _storage_plugin_cache: dict[str, Any] = {}
+_storage_plugin_cache_lock = threading.Lock()
 
 
 def discover_storage_plugins() -> list[dict[str, Any]]:
@@ -109,8 +111,9 @@ def _parse_config_fields_ast(node: ast.List | ast.Tuple) -> list[dict[str, Any]]
 
 def load_storage_plugin_module(storage_type: str):
     """Dynamically load a storage plugin module by type name."""
-    if storage_type in _storage_plugin_cache:
-        return _storage_plugin_cache[storage_type]
+    with _storage_plugin_cache_lock:
+        if storage_type in _storage_plugin_cache:
+            return _storage_plugin_cache[storage_type]
 
     if not re.fullmatch(r"[a-zA-Z0-9_]+", storage_type):
         raise ValueError(f"Invalid storage plugin type: {storage_type}")
@@ -125,7 +128,8 @@ def load_storage_plugin_module(storage_type: str):
 
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    _storage_plugin_cache[storage_type] = module
+    with _storage_plugin_cache_lock:
+        _storage_plugin_cache[storage_type] = module
     return module
 
 
