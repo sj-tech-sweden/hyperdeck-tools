@@ -1628,7 +1628,10 @@ function createScheduleRowElement(item = { id: '', planned_title: '' }) {
             </div>
         </div>
         <div class="mt-1.5 flex justify-between items-center text-[10px]">
-            <button onclick="selectActiveFromRow(this)" class="text-indigo-400 hover:text-indigo-300 font-medium cursor-pointer">Set Active</button>
+            <div class="flex gap-3">
+                <button onclick="selectActiveFromRow(this)" class="text-indigo-400 hover:text-indigo-300 font-medium cursor-pointer">Set Active</button>
+                <button onclick="wpPushEventToDevices(this)" class="text-emerald-400 hover:text-emerald-300 font-medium cursor-pointer">Push</button>
+            </div>
             ${isActive ? '<span class="rounded bg-indigo-600/30 px-1.5 py-0.5 text-indigo-300">LIVE</span>' : ''}
         </div>
     `;
@@ -1818,6 +1821,58 @@ async function selectActiveFromRow(buttonEl) {
     await selectActiveEventContext(id || startTime, plannedTitle);
 }
 
+// Render plugin-declared inputs (PLUGIN_INPUTS) into a container so each
+// plugin can ask for exactly the parameters it needs (e.g. a year, a venue).
+function renderPluginInputs(containerId, prefix, inputs) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    container.innerHTML = '';
+    (inputs || []).forEach(inp => {
+        const wrap = document.createElement('div');
+        wrap.className = 'flex items-center gap-2';
+        const label = document.createElement('label');
+        label.textContent = inp.label || inp.name;
+        label.className = 'text-[11px] text-slate-400 whitespace-nowrap';
+        label.setAttribute('for', `${prefix}-input-${inp.name}`);
+        const input = document.createElement('input');
+        input.type = inp.type || 'text';
+        input.id = `${prefix}-input-${inp.name}`;
+        input.name = inp.name;
+        input.className = 'w-24 rounded bg-slate-950 border border-slate-800 text-xs px-2 py-1 text-slate-300 focus:outline-none focus:ring-1 focus:ring-indigo-500';
+        if (inp.placeholder) input.placeholder = inp.placeholder;
+        if (inp.default === 'current_year') {
+            input.value = new Date().getFullYear();
+        } else if (inp.default != null) {
+            input.value = inp.default;
+        }
+        if (inp.min != null) input.min = inp.min;
+        if (inp.max != null) input.max = inp.max;
+        wrap.appendChild(label);
+        wrap.appendChild(input);
+        if (inp.help) {
+            const help = document.createElement('span');
+            help.className = 'text-[10px] text-slate-500';
+            help.textContent = inp.help;
+            wrap.appendChild(help);
+        }
+        container.appendChild(wrap);
+    });
+}
+
+// Read the rendered plugin inputs back into a payload object, coercing numbers.
+function readPluginInputs(prefix, inputs) {
+    const payload = {};
+    (inputs || []).forEach(inp => {
+        const el = document.getElementById(`${prefix}-input-${inp.name}`);
+        if (!el) return;
+        let val = el.value.trim();
+        if (val === '') return;
+        if (inp.type === 'number') val = parseInt(val, 10);
+        payload[inp.name] = val;
+    });
+    return payload;
+}
+
 async function triggerPluginSync() {
     const selector = document.getElementById('plugin-selector');
     const plugin = selector.value;
@@ -1840,7 +1895,14 @@ async function triggerPluginSync() {
         syncButton.innerText = 'Syncing...';
         syncStatus.innerText = `Running plugin: ${plugin}`;
 
-        const res = await fetch(`/api/plugins/run/${encodeURIComponent(plugin)}`, { method: 'POST' });
+        const runUrl = HD_API_BASE ? `${HD_API_BASE}/api/plugins/run/${encodeURIComponent(plugin)}` : `/api/plugins/run/${encodeURIComponent(plugin)}`;
+        const selectedPlugin = availablePlugins.find(p => p.name === plugin);
+        const payload = readPluginInputs('plugin', selectedPlugin?.inputs || []);
+        const res = await fetch(runUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
         const data = await res.json();
         if (!res.ok) {
             showToast(data.detail || 'Plugin sync failed.', 'error');
@@ -1848,11 +1910,20 @@ async function triggerPluginSync() {
             return;
         }
 
+        // Surface the plugin's real outcome (e.g. "zero assets") rather than
+        // masking it with a stale schedule count.
+        if (data.status !== 'success') {
+            syncStatus.innerText = data.message || 'Sync returned no data';
+            showToast(data.message || 'Sync returned no data', 'warning');
+            return;
+        }
+
         const scheduleRes = await fetch(HD_API_BASE + '/api/schedule');
         const schedule = await scheduleRes.json();
         renderScheduleMatrix(schedule);
 
-        const count = Array.isArray(schedule) ? schedule.length : 0;
+        const count = data.items_synced != null ? data.items_synced
+                    : (Array.isArray(schedule) ? schedule.length : 0);
         syncStatus.innerText = `Last sync: ${count} rows loaded from ${plugin}`;
     } catch (e) {
         showToast('Plugin sync request failed.', 'error');
@@ -1889,7 +1960,8 @@ async function uploadScheduleFile() {
         uploadButton.innerText = 'Uploading...';
         uploadStatus.innerText = `Uploading ${file.name}...`;
 
-        const res = await fetch(`/api/plugins/upload/${encodeURIComponent(plugin)}`, {
+        const uploadUrl = HD_API_BASE ? `${HD_API_BASE}/api/plugins/upload/${encodeURIComponent(plugin)}` : `/api/plugins/upload/${encodeURIComponent(plugin)}`;
+        const res = await fetch(uploadUrl, {
             method: 'POST',
             body: formData,
         });
@@ -1941,6 +2013,7 @@ function updatePluginDetails() {
         uploadPanel.classList.add('hidden');
         if (fileInput) fileInput.value = '';
         uploadStatus.innerText = 'No file uploaded yet.';
+        renderPluginInputs('plugin-inputs', 'plugin', []);
         return;
     }
 
@@ -1949,6 +2022,7 @@ function updatePluginDetails() {
     syncButton.disabled = selectedPlugin?.enabled === false;
     syncButton.classList.remove('opacity-50', 'cursor-not-allowed');
     syncButton.innerText = '🔄 Fetch & Sync Schedule';
+    renderPluginInputs('plugin-inputs', 'plugin', selectedPlugin?.inputs || []);
     const supportsUpload = !!selectedPlugin?.supports_upload;
     uploadPanel.classList.toggle('hidden', !supportsUpload);
     if (supportsUpload) {
@@ -3959,6 +4033,10 @@ Object.assign(window, {
     wpSaveAsProfile,
     wpEditProfile,
     wpApplyProfile,
+    wpOpenApplyProfilePopup,
+    wpConfigureApTarget,
+    wpApplyProfileWithTarget,
+    wpCloseApModal,
     wpDeleteProfile,
     wpTriggerPluginSync,
     wpUploadScheduleFile,
@@ -4214,6 +4292,9 @@ function switchAppTab(tab) {
         loadWpProfiles();
         wpLoadPluginSelector();
         wpLoadApplyProfileSelect();
+        wpPopulatePushProfileSelect();
+        wpOnPushTargetChanged();
+        wpLoadAutoApplyEvent();
         wpUpdateStagedEventHud();
         startWpSse();
         // Setup push target change handler
@@ -4609,37 +4690,6 @@ const STREAM_PLATFORM_PRESETS = {
     },
 };
 
-// --- Pending Changes Queue for Streaming Devices ---
-let pendingChangesQueue = {};  // host -> settings to apply after stream ends
-
-function wpQueueChangeForHost(host, settings) {
-    pendingChangesQueue[host] = settings;
-}
-
-function wpApplyPendingChanges() {
-    Object.entries(pendingChangesQueue).forEach(([host, settings]) => {
-        const state = wpStateCache[host] || {};
-        if (!state.streaming) {
-            const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/${host}/settings` : `/api/wp/${host}/settings`;
-            fetch(url, {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify(settings),
-            }).then(res => {
-                if (res.ok) {
-                    delete pendingChangesQueue[host];
-                    showToast(`Settings applied to ${host}`, 'success');
-                }
-            }).catch(() => {
-                // Keep in queue for retry on next cycle
-            });
-        }
-    });
-}
-
-// Check for pending changes every 5 seconds
-setInterval(wpApplyPendingChanges, 5000);
-
 function wpApplyPlatformPreset() {
     const platform = document.getElementById('wp-cfg-platform').value;
     const preset = STREAM_PLATFORM_PRESETS[platform];
@@ -4890,7 +4940,7 @@ async function loadWpProfiles() {
                             <span class="text-[10px] text-slate-500 ml-2">${escHtml(desc)}</span>
                         </div>
                         <div class="flex gap-1 ml-2 shrink-0">
-                            <button onclick="wpApplyProfile('${escAttr(p.name)}')" class="text-[10px] bg-indigo-600/20 text-indigo-300 border border-indigo-500/30 rounded px-2 py-1 hover:bg-indigo-600 hover:text-white transition cursor-pointer">Apply</button>
+                            <button onclick="wpOpenApplyProfilePopup('${escAttr(p.name)}')" class="text-[10px] bg-indigo-600/20 text-indigo-300 border border-indigo-500/30 rounded px-2 py-1 hover:bg-indigo-600 hover:text-white transition cursor-pointer">Apply ▸</button>
                             <button onclick="wpEditProfile('${escAttr(p.name)}')" class="text-[10px] bg-slate-800 text-slate-300 border border-slate-700 rounded px-2 py-1 hover:bg-slate-700 hover:text-white transition cursor-pointer">Edit</button>
                             <button onclick="wpDeleteProfile('${escAttr(p.name)}')" class="text-[10px] bg-rose-600/20 text-rose-300 border border-rose-500/30 rounded px-2 py-1 hover:bg-rose-600 hover:text-white transition cursor-pointer">Del</button>
                         </div>
@@ -4973,6 +5023,8 @@ function wpEditCurrentProfile() {
     if (activeProfileName) wpEditProfile(activeProfileName);
 }
 
+// Form-fill a saved profile into the editable stream config (used when an
+// event's stream_profile is selected — not a device push).
 async function wpApplyProfile(name) {
     const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/profiles` : '/api/wp/profiles';
     try {
@@ -4999,8 +5051,94 @@ async function wpApplyProfile(name) {
             document.getElementById('wp-cfg-backup-url').value = s.backup_url || '';
             document.getElementById('wp-cfg-backup-key').value = s.backup_key || '';
         }
-        showToast(`Profile "${name}" applied`, 'success');
+        showToast(`Profile "${name}" loaded into form`, 'success');
     } catch (_) { showToast('Failed to load profile', 'error'); }
+}
+
+// --- Apply Profile to a Chosen Target (popup) ---
+let wpApProfileName = '';
+
+function wpOpenApplyProfilePopup(name) {
+    wpApProfileName = name;
+    const label = document.getElementById('wp-ap-profile-name');
+    if (label) label.textContent = name;
+    const targetSel = document.getElementById('wp-ap-target');
+    if (targetSel) targetSel.value = 'all';
+    wpConfigureApTarget();
+    const modal = document.getElementById('wp-ap-modal');
+    if (modal) modal.classList.remove('hidden');
+}
+
+function wpConfigureApTarget() {
+    const scope = document.getElementById('wp-ap-target').value;
+    const showRole = (scope === 'primary' || scope === 'backup' || scope === 'rolestage');
+    const showStage = (scope === 'stage' || scope === 'rolestage');
+    const showDevice = (scope === 'device');
+    document.getElementById('wp-ap-role-row').classList.toggle('hidden', !showRole);
+    document.getElementById('wp-ap-stage-row').classList.toggle('hidden', !showStage);
+    document.getElementById('wp-ap-device-row').classList.toggle('hidden', !showDevice);
+
+    if (showStage) {
+        const stages = new Set(Object.values(wpPresentersConfig).map(p => p.stage).filter(Boolean));
+        const stageSelect = document.getElementById('wp-ap-stage');
+        const current = stageSelect.value;
+        stageSelect.innerHTML = '<option value="">Select stage...</option>';
+        stages.forEach(s => { const opt = document.createElement('option'); opt.value = s; opt.textContent = s; stageSelect.appendChild(opt); });
+        stageSelect.value = current;
+    }
+    if (showDevice) {
+        const deviceSelect = document.getElementById('wp-ap-devices');
+        deviceSelect.innerHTML = '';
+        Object.keys(wpPresentersConfig).forEach(name => {
+            const opt = document.createElement('option');
+            opt.value = wpPresentersConfig[name].host;
+            opt.textContent = name;
+            deviceSelect.appendChild(opt);
+        });
+    }
+}
+
+async function wpApplyProfileWithTarget() {
+    const scope = document.getElementById('wp-ap-target').value;
+    const role = document.getElementById('wp-ap-role').value;
+    const stage = document.getElementById('wp-ap-stage').value;
+    const deviceSelect = document.getElementById('wp-ap-devices');
+    const hosts = Array.from(deviceSelect.selectedOptions).map(o => o.value).filter(Boolean);
+    const built = wpBuildTargetFromControls(scope, role, stage, hosts);
+    if (!built) return;
+    const target = built.target;
+
+    if (scope !== 'device' && !confirm(`Apply profile "${wpApProfileName}" to all matching devices?`)) return;
+
+    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/profiles/apply` : '/api/wp/profiles/apply';
+    const resultEl = document.getElementById('wp-ap-result');
+    try {
+        const res = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ profile: wpApProfileName, target }),
+        });
+        const data = await res.json();
+        if (!res.ok) { showToast(data.detail || 'Apply failed', 'error'); if (resultEl) resultEl.textContent = data.detail || 'Apply failed'; return; }
+        const results = data.results || [];
+        const lines = results.map(r => `${r.name || r.host}: ${r.status}${r.reason ? ' (' + r.reason + ')' : ''}`);
+        if (resultEl) resultEl.textContent = lines.join('\n');
+        const queued = results.filter(r => r.status === 'queued').length;
+        let msg = `Applied "${wpApProfileName}" to ${data.targets} target(s)`;
+        if (queued > 0) msg += ` (${queued} queued: live — applies after stream ends)`;
+        showToast(msg, queued > 0 ? 'warning' : 'success');
+        setTimeout(wpCloseApModal, queued > 0 ? 1500 : 600);
+    } catch (e) {
+        showToast('Apply request failed', 'error');
+        if (resultEl) resultEl.textContent = 'Apply request failed';
+    }
+}
+
+function wpCloseApModal() {
+    const modal = document.getElementById('wp-ap-modal');
+    if (modal) modal.classList.add('hidden');
+    const resultEl = document.getElementById('wp-ap-result');
+    if (resultEl) resultEl.textContent = '';
 }
 
 async function wpDeleteProfile(name) {
@@ -5191,18 +5329,24 @@ function wpOnRowProfileChanged(selectEl) {
 // --- Bulk Stream Assignment ---
 function wpOnPushTargetChanged() {
     const target = document.getElementById('wp-push-target').value;
-    document.getElementById('wp-push-stage-row').classList.toggle('hidden', target !== 'stage');
-    document.getElementById('wp-push-device-row').classList.toggle('hidden', target !== 'device');
+    const showRole = (target === 'primary' || target === 'backup' || target === 'rolestage');
+    const showStage = (target === 'stage' || target === 'rolestage');
+    const showDevice = (target === 'device');
+    document.getElementById('wp-push-role-row').classList.toggle('hidden', !showRole);
+    document.getElementById('wp-push-stage-row').classList.toggle('hidden', !showStage);
+    document.getElementById('wp-push-device-row').classList.toggle('hidden', !showDevice);
 
-    if (target === 'stage') {
-        const stageSelect = document.getElementById('wp-push-stage');
+    if (showStage) {
         const stages = new Set(Object.values(wpPresentersConfig).map(p => p.stage).filter(Boolean));
+        const stageSelect = document.getElementById('wp-push-stage');
+        const current = stageSelect.value;
         stageSelect.innerHTML = '<option value="">Select stage...</option>';
         stages.forEach(s => { const opt = document.createElement('option'); opt.value = s; opt.textContent = s; stageSelect.appendChild(opt); });
+        stageSelect.value = current;
     }
-    if (target === 'device') {
-        const deviceSelect = document.getElementById('wp-push-device');
-        deviceSelect.innerHTML = '<option value="">Select device...</option>';
+    if (showDevice) {
+        const deviceSelect = document.getElementById('wp-push-devices');
+        deviceSelect.innerHTML = '';
         Object.keys(wpPresentersConfig).forEach(name => {
             const opt = document.createElement('option');
             opt.value = wpPresentersConfig[name].host;
@@ -5212,81 +5356,117 @@ function wpOnPushTargetChanged() {
     }
 }
 
+// Build the `target` filter dict expected by POST /api/wp/profiles/apply from
+// the chosen scope + role/stage/host controls. Returns null (with a toast) if
+// the selection is incomplete.
+function wpBuildTargetFromControls(scope, role, stage, hosts) {
+    const target = {};
+    if (scope === 'all') {
+        // no filters
+    } else if (scope === 'primary') {
+        target.role = 'primary';
+    } else if (scope === 'backup') {
+        target.role = 'backup';
+    } else if (scope === 'stage') {
+        if (!stage) { showToast('Select a stage', 'warning'); return null; }
+        target.stage = stage;
+    } else if (scope === 'rolestage') {
+        if (!stage) { showToast('Select a stage', 'warning'); return null; }
+        target.role = role;
+        target.stage = stage;
+    } else if (scope === 'device') {
+        if (!hosts || hosts.length === 0) { showToast('Select at least one device', 'warning'); return null; }
+        target.hosts = hosts;
+    }
+    return { target, scope };
+}
+
 async function wpPushToTarget() {
-    const target = document.getElementById('wp-push-target').value;
-    const config = wpCollectStreamConfig();
-    if (Object.keys(config).length === 0) { showToast('Configure stream settings first', 'warning'); return; }
+    const scope = document.getElementById('wp-push-target').value;
+    const profileName = document.getElementById('wp-push-profile').value;
+    const stage = document.getElementById('wp-push-stage').value;
+    const role = document.getElementById('wp-push-role').value;
+    const deviceSelect = document.getElementById('wp-push-devices');
+    const hosts = Array.from(deviceSelect.selectedOptions).map(o => o.value).filter(Boolean);
+    const built = wpBuildTargetFromControls(scope, role, stage, hosts);
+    if (!built) return;
+    const target = built.target;
 
-    let devices = [];
-    if (target === 'all') {
-        devices = Object.values(wpPresentersConfig).filter(p => p.host);
-    } else if (target === 'primary') {
-        devices = Object.values(wpPresentersConfig).filter(p => p.role === 'primary' && p.host);
-    } else if (target === 'backup') {
-        devices = Object.values(wpPresentersConfig).filter(p => p.role === 'backup' && p.host);
-    } else if (target === 'stage') {
-        const stage = document.getElementById('wp-push-stage').value;
-        if (!stage) { showToast('Select a stage', 'warning'); return; }
-        devices = Object.values(wpPresentersConfig).filter(p => p.stage === stage && p.host);
-    } else if (target === 'device') {
-        const host = document.getElementById('wp-push-device').value;
-        if (!host) { showToast('Select a device', 'warning'); return; }
-        devices = Object.values(wpPresentersConfig).filter(p => p.host === host);
+    let payload;
+    if (profileName) {
+        payload = { profile: profileName, target };
+    } else {
+        const config = wpCollectStreamConfig();
+        if (Object.keys(config).length === 0) { showToast('Configure stream settings first, or pick a profile', 'warning'); return; }
+        payload = { settings: config, target };
     }
 
-    if (devices.length === 0) { showToast('No devices match the selected target', 'warning'); return; }
-    if (!confirm(`Push settings to ${devices.length} device(s)?`)) return;
+    // Safety confirmation for broad targets (backend queues live devices).
+    if (scope !== 'device' && !confirm('Apply settings to all matching devices?')) return;
 
-    let successCount = 0;
-    let queuedCount = 0;
-    for (const device of devices) {
-        const settings = {};
-        if (config.video_mode) settings['Video Mode'] = config.video_mode;
-        if (config.platform) settings['Current Platform'] = config.platform;
-        if (config.quality) settings['Current Quality Level'] = config.quality;
-
-        if (config.protocol === 'srt') {
-            settings['Current Server'] = 'Custom';
-            settings['Current Platform'] = 'Custom URL H.264';
-            if (config.srt_primary) settings['Current URL'] = config.srt_primary;
-            if (config.srt_passphrase) settings['Password'] = config.srt_passphrase;
-        } else {
-            if (device.role === 'backup') {
-                if (config.platform === 'Custom' || config.platform === 'Custom URL H.264') {
-                    settings['Current Server'] = 'Custom';
-                    if (config.backup_url) settings['Current URL'] = config.backup_url;
-                } else {
-                    settings['Current Server'] = 'Secondary';
-                }
-                if (config.backup_key) settings['Stream Key'] = config.backup_key;
-            } else {
-                if (config.platform === 'Custom' || config.platform === 'Custom URL H.264') {
-                    settings['Current Server'] = 'Custom';
-                    if (config.primary_url) settings['Current URL'] = config.primary_url;
-                } else {
-                    settings['Current Server'] = 'Primary';
-                }
-                if (config.primary_key) settings['Stream Key'] = config.primary_key;
-            }
-        }
-
-        // If device is currently streaming, queue changes instead of pushing
-        const state = wpStateCache[device.host] || {};
-        if (state.streaming) {
-            wpQueueChangeForHost(device.host, settings);
-            queuedCount++;
-            continue;
-        }
-
-        try {
-            const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/${device.host}/settings` : `/api/wp/${device.host}/settings`;
-            const res = await fetch(url, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(settings) });
-            if (res.ok) successCount++;
-        } catch (_) {}
+    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/profiles/apply` : '/api/wp/profiles/apply';
+    try {
+        const res = await fetch(url, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
+        const data = await res.json();
+        if (!res.ok) { showToast(data.detail || 'Apply failed', 'error'); return; }
+        const results = data.results || [];
+        const lines = results.map(r => `${r.name || r.host}: ${r.status}${r.reason ? ' (' + r.reason + ')' : ''}`);
+        const resultEl = document.getElementById('wp-push-result');
+        if (resultEl) resultEl.textContent = lines.join('\n');
+        const queued = results.filter(r => r.status === 'queued').length;
+        let msg = `Applied to ${data.targets} target(s)`;
+        if (queued > 0) msg += ` (${queued} queued: live — applies after stream ends)`;
+        showToast(msg, queued > 0 ? 'warning' : 'success');
+    } catch (e) {
+        showToast('Apply request failed', 'error');
     }
-    let msg = `Pushed to ${successCount} device(s)`;
-    if (queuedCount > 0) msg += `, queued ${queuedCount} (streaming — will apply after stream ends)`;
-    showToast(msg, successCount === devices.length ? 'success' : 'warning');
+}
+
+function wpPopulatePushProfileSelect() {
+    const select = document.getElementById('wp-push-profile');
+    if (!select) return;
+    loadWpProfilesIntoSelect(select, select.value);
+    if (select.options.length && select.options[0].value === '') {
+        select.options[0].textContent = 'Use current form';
+    }
+}
+
+async function wpPushEventToDevices(buttonEl) {
+    const row = buttonEl.closest('.schedule-row-item');
+    if (!row) return;
+    const id = (row.querySelector('.sch-id')?.value || '').trim();
+    if (!id) { showToast('Event has no id to push', 'warning'); return; }
+    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/schedule/${encodeURIComponent(id)}/apply` : `/api/wp/schedule/${encodeURIComponent(id)}/apply`;
+    try {
+        const res = await fetch(url, { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok) { showToast(data.detail || 'Push failed', 'error'); return; }
+        const results = data.results || [];
+        const queued = results.filter(r => r.status === 'queued').length;
+        let msg = `Pushed event to ${data.targets} device(s) on its stage`;
+        if (queued > 0) msg += ` (${queued} queued: live)`;
+        showToast(msg, queued > 0 ? 'warning' : 'success');
+    } catch (e) {
+        showToast('Push request failed', 'error');
+    }
+}
+
+async function wpSaveAutoApplyEvent(checked) {
+    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/config` : '/api/wp/config';
+    try {
+        await fetch(url, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ wp_auto_apply_event: checked }) });
+    } catch (_) {}
+}
+
+async function wpLoadAutoApplyEvent() {
+    const checkbox = document.getElementById('wp-auto-apply-event');
+    if (!checkbox) return;
+    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/config` : '/api/wp/config';
+    try {
+        const res = await fetch(url);
+        const data = await res.json();
+        checkbox.checked = !!data.wp_auto_apply_event;
+    } catch (_) {}
 }
 
 async function wpFetchKeys() {
@@ -5340,6 +5520,7 @@ async function wpLoadPluginSelector() {
                 const syncBtn = document.getElementById('wp-btn-plugin-sync');
                 const uploadPanel = document.getElementById('wp-plugin-upload-panel');
                 const plugin = (typeof availablePlugins !== 'undefined' ? availablePlugins : []).find(pl => pl.name === select.value);
+                renderPluginInputs('wp-plugin-inputs', 'wp-plugin', plugin?.inputs || []);
                 if (!select.value) {
                     if (desc) desc.textContent = 'No plugin selected. Manual schedule editing is active.';
                     if (syncBtn) { syncBtn.disabled = false; syncBtn.textContent = 'Fetch & Sync Schedule'; }
@@ -5377,8 +5558,13 @@ async function wpTriggerPluginSync() {
 
     if (status) status.textContent = 'Syncing...';
     const url = HD_API_BASE ? `${HD_API_BASE}/api/plugins/run/${pluginName}` : `/api/plugins/run/${pluginName}`;
+    const payload = readPluginInputs('wp-plugin', plugin?.inputs || []);
     try {
-        const res = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'});
+        const res = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
         const data = await res.json();
         if (data.status === 'success') {
             await loadWpSchedule();
@@ -5482,7 +5668,8 @@ function wpUpdateStageSelectors() {
         stages.forEach(s => { const opt = document.createElement('option'); opt.value = s; datalist.appendChild(opt); });
     }
     const pushStage = document.getElementById('wp-push-stage');
-    if (pushStage && document.getElementById('wp-push-target')?.value === 'stage') {
+    const pushScope = document.getElementById('wp-push-target')?.value;
+    if (pushStage && (pushScope === 'stage' || pushScope === 'rolestage')) {
         const current = pushStage.value;
         pushStage.innerHTML = '<option value="">Select stage...</option>';
         stages.forEach(s => { const opt = document.createElement('option'); opt.value = s; opt.textContent = s; pushStage.appendChild(opt); });

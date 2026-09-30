@@ -144,6 +144,37 @@ class TestSendWpCommand:
         assert "Idle" in result
         writer.close.assert_called_once()
 
+    def test_payload_terminated_with_blank_line(self):
+        """The Web Presenter protocol requires each section to end with a blank line."""
+        reader, writer = _make_mock_reader_writer(b"\x06\n")
+
+        async def _run():
+            with patch("asyncio.open_connection", return_value=(reader, writer)):
+                from app.backend.wp_control import send_wp_command
+                await send_wp_command("192.168.1.100", "STREAM STATE:")
+
+        asyncio.run(_run())
+        written = b"".join(
+            call.args[0] for call in writer.write.call_args_list
+        ).decode("utf-8")
+        assert written == "STREAM STATE:\r\n\r\n"
+
+    def test_body_command_terminated_with_blank_line(self):
+        reader, writer = _make_mock_reader_writer(b"\x06\n")
+
+        async def _run():
+            with patch("asyncio.open_connection", return_value=(reader, writer)):
+                from app.backend.wp_control import send_wp_command
+                await send_wp_command(
+                    "192.168.1.100", "STREAM SETTINGS:\r\nVideo Mode: Auto"
+                )
+
+        asyncio.run(_run())
+        written = b"".join(
+            call.args[0] for call in writer.write.call_args_list
+        ).decode("utf-8")
+        assert written == "STREAM SETTINGS:\r\nVideo Mode: Auto\r\n\r\n"
+
     def test_connection_closed_on_timeout(self):
         reader, writer = _make_mock_reader_writer(b"")
         reader.readuntil = AsyncMock(side_effect=asyncio.TimeoutError)

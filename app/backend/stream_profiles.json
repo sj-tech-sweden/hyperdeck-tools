@@ -26,5 +26,19 @@
             "backup_url": "rtmp://b.rtmp.youtube.com/live2",
             "backup_key": ""
         }
+    },
+    {
+        "name": "Test SRT",
+        "settings": {
+            "title": "",
+            "platform": "Custom",
+            "quality": "Streaming Medium",
+            "video_mode": "Auto",
+            "protocol": "srt",
+            "srt_primary": "srt://test",
+            "srt_passphrase": "",
+            "srt_backup": "",
+            "srt_backup_passphrase": ""
+        }
     }
 ]

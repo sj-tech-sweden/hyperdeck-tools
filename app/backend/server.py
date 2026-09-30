@@ -606,6 +606,7 @@ def read_plugin_manifest(plugin_name: str) -> dict[str, Any]:
         "description": "No plugin description provided.",
         "enabled": False,
         "supports_upload": False,
+        "inputs": [],
     }
 
     try:
@@ -630,6 +631,12 @@ def read_plugin_manifest(plugin_name: str) -> dict[str, Any]:
                 if isinstance(target, ast.Name) and target.id == "PLUGIN_SUPPORTS_FILE_UPLOAD":
                     if isinstance(node.value, ast.Constant) and isinstance(node.value.value, bool):
                         manifest["supports_upload"] = node.value.value
+                if isinstance(target, ast.Name) and target.id == "PLUGIN_INPUTS":
+                    try:
+                        parsed = ast.literal_eval(node.value)
+                        manifest["inputs"] = parsed if isinstance(parsed, list) else []
+                    except Exception:
+                        manifest["inputs"] = []
     return manifest
 
 def load_plugin_module(plugin_name: str):

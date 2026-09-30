@@ -19,6 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+from app.backend.discovery import get_active_interface_network
 from app.backend.utils import atomic_json_write
 from app.backend.wp_control import (
     WP_PORT,
@@ -31,7 +32,10 @@ from app.backend.wp_control import (
     stop_stream,
 )
 from app.backend.wp_daemon import (
+    _resolve_event_stream_config,
+    apply_settings_to_targets,
     global_presenter_state_cache,
+    load_profile_settings,
 )
 
 logger = logging.getLogger(__name__)
@@ -47,6 +51,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "wp_presenter_roles": {},
     "wp_default_quality": "Streaming Medium",
     "wp_auto_sync_interval": 2,
+    "wp_auto_apply_event": False,
     "destinations": [],
     "filename_template": "{year}{month}{day}_{planned_title}",
     "hyperdecks": {},
@@ -78,6 +83,7 @@ def _normalize_config(config: dict[str, Any]) -> dict[str, Any]:
         merged["wp_auto_sync_interval"] = max(1, int(merged.get("wp_auto_sync_interval", 2)))
     except (TypeError, ValueError):
         merged["wp_auto_sync_interval"] = 2
+    merged["wp_auto_apply_event"] = bool(merged.get("wp_auto_apply_event", False))
     return merged
 
 
@@ -140,6 +146,7 @@ async def get_wp_config():
         "webpresenters": config.get("webpresenters", {}),
         "wp_default_quality": config.get("wp_default_quality", "Streaming Medium"),
         "wp_auto_sync_interval": config.get("wp_auto_sync_interval", 2),
+        "wp_auto_apply_event": config.get("wp_auto_apply_event", False),
     }
 
 
@@ -152,6 +159,8 @@ async def save_wp_config(payload: dict[str, Any]):
         config["wp_default_quality"] = payload["wp_default_quality"]
     if "wp_auto_sync_interval" in payload:
         config["wp_auto_sync_interval"] = payload["wp_auto_sync_interval"]
+    if "wp_auto_apply_event" in payload:
+        config["wp_auto_apply_event"] = bool(payload["wp_auto_apply_event"])
     atomic_json_write(CONFIG_FILE, _normalize_config(config))
     global _wp_config_cache, _wp_config_cache_mtime
     with _wp_config_lock:
@@ -235,19 +244,14 @@ async def delete_presenter(name: str):
 @app.get("/api/wp/discover")
 async def discover_presenters():
     """Scan the local subnet for Blackmagic Web Presenters on port 9977."""
-    import ipaddress
-    import socket
-
-    hostname = socket.gethostname()
-    try:
-        local_ip = socket.gethostbyname(hostname)
-    except Exception:
-        local_ip = "127.0.0.1"
-
-    network = ipaddress.ip_network(f"{local_ip}/24", strict=False)
+    network = get_active_interface_network()
     found = []
+    seen: set[str] = set()
 
     async def _check(ip_str: str) -> None:
+        if ip_str in seen:
+            return
+        seen.add(ip_str)
         if await check_connectivity(ip_str, port=WP_PORT, timeout=0.5):
             try:
                 identity = await get_identity(ip_str, port=WP_PORT)
@@ -260,8 +264,13 @@ async def discover_presenters():
                 found.append({"ip": ip_str, "model": "Unknown", "label": ""})
 
     hosts = [str(ip) for ip in network.hosts()]
-    await asyncio.gather(*[_check(ip) for ip in hosts[:50]], return_exceptions=True)
-    return {"found": found, "subnet": str(network), "scanned": len(hosts[:50])}
+    semaphore = asyncio.Semaphore(150)
+    async def _bounded(ip_str: str) -> None:
+        async with semaphore:
+            await _check(ip_str)
+
+    await asyncio.gather(*[_bounded(ip) for ip in hosts], return_exceptions=True)
+    return {"found": found, "subnet": str(network), "scanned": len(hosts)}
 
 
 # --- State & SSE Routes ---
@@ -564,6 +573,56 @@ async def delete_profile(name: str):
     profiles = [p for p in profiles if p.get("name") != name]
     atomic_json_write(STREAM_PROFILES_FILE, profiles)
     return {"status": "ok"}
+
+
+@app.post("/api/wp/profiles/apply")
+async def apply_profile_to_targets(payload: dict[str, Any]):
+    """Apply a saved profile (or inline settings) to presenters matching a target.
+
+    Body:
+        profile: name of a saved stream profile (optional)
+        settings: inline stream config (optional, used when no profile given)
+        target: {role?, stage?, hosts?}  -- role+stage are AND-combined
+    """
+    profile_name = str(payload.get("profile") or "").strip()
+    inline_settings = payload.get("settings") or {}
+    target = payload.get("target") or {}
+
+    if profile_name:
+        settings = load_profile_settings(profile_name)
+        if settings is None:
+            raise HTTPException(status_code=404, detail=f"Profile '{profile_name}' not found")
+    else:
+        settings = inline_settings
+
+    if not settings or not isinstance(settings, dict):
+        raise HTTPException(status_code=400, detail="No profile or settings provided")
+
+    return await apply_settings_to_targets(settings, target)
+
+
+@app.post("/api/wp/schedule/{event_id}/apply")
+async def apply_event_profile_to_targets(event_id: str):
+    """Apply a schedule event's profile/config to the presenters on its stage."""
+    event = None
+    if os.path.exists(SCHEDULE_FILE):
+        try:
+            with open(SCHEDULE_FILE, "r", encoding="utf-8") as f:
+                schedule = json.load(f) or []
+            event = next((e for e in schedule if str(e.get("id", "")).strip() == event_id), None)
+        except Exception:
+            pass
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
+
+    settings = _resolve_event_stream_config(event)
+    stage = str(event.get("stage") or "").strip()
+    if not stage:
+        raise HTTPException(status_code=400, detail="Event has no stage assigned")
+    if not settings:
+        raise HTTPException(status_code=400, detail="Event has no stream profile or config")
+
+    return await apply_settings_to_targets(settings, {"stage": stage})
 
 
 # --- YouTube Plugin Configuration ---

@@ -1,14 +1,26 @@
 import datetime
+import html
 import re
-from collections import defaultdict
 
 import requests
-from bs4 import BeautifulSoup
 
 PLUGIN_LABEL = "Gullbranna Festival Program"
 PLUGIN_DESCRIPTION = "Fetches and converts the Gullbranna festival program into schedule rows."
 
-URL = "https://gullbrannafestivalen.com/program/"
+PLUGIN_INPUTS = [
+    {
+        "name": "year",
+        "label": "Festival Year",
+        "type": "number",
+        "placeholder": "yyyy",
+        "default": "current_year",
+        "min": 2000,
+        "max": 2100,
+        "help": "pre-filled with current year; use arrows for other years",
+    },
+]
+
+API_BASE = "https://gullbrannafestivalen.com/wp-json/tribe/events/v1/events"
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -17,46 +29,11 @@ HEADERS = {
     )
 }
 
-SWEDISH_MONTHS = {
-    "jan": "01",
-    "feb": "02",
-    "mar": "03",
-    "apr": "04",
-    "maj": "05",
-    "jun": "06",
-    "jul": "07",
-    "aug": "08",
-    "sep": "09",
-    "okt": "10",
-    "nov": "11",
-    "dec": "12",
-}
-
-
-def detect_festival_year(soup: BeautifulSoup) -> int:
-    page_text = soup.get_text(" ", strip=True)
-    year_match = re.search(r"\b(20\d{2})\b", page_text)
-    if year_match:
-        return int(year_match.group(1))
-    return datetime.datetime.now().year
-
-
-def parse_date_to_iso(date_str: str, festival_year: int) -> str:
-    day_match = re.search(r"\d+", date_str)
-    day = int(day_match.group()) if day_match else 1
-
-    normalized = date_str.lower().strip()
-    month_num = "07"
-    for prefix, number in SWEDISH_MONTHS.items():
-        if prefix in normalized:
-            month_num = number
-            break
-
-    return f"{festival_year}-{month_num}-{day:02d}"
-
 
 def clean_title(value: str) -> str:
-    cleaned = value.strip()
+    cleaned = html.unescape(value or "").strip()
+    # Strip any residual HTML tags.
+    cleaned = re.sub(r"<[^>]+>", "", cleaned)
     replacements = {
         "\u00e5": "a",
         "\u00e4": "a",
@@ -64,6 +41,8 @@ def clean_title(value: str) -> str:
         "\u00c5": "A",
         "\u00c4": "A",
         "\u00d6": "O",
+        "\u2013": "-",
+        "\u2014": "-",
     }
     for old, new in replacements.items():
         cleaned = cleaned.replace(old, new)
@@ -74,84 +53,65 @@ def clean_title(value: str) -> str:
     return cleaned
 
 
-def _extract_title_from_node(node) -> str:
-    parent = node
-    for _ in range(4):
-        parent = parent.parent
-        if not parent:
+def _event_to_row(event: dict[str, str]) -> dict[str, str] | None:
+    title_raw = event.get("title") or ""
+    title = clean_title(title_raw)
+    if not title:
+        return None
+
+    start = (event.get("start_date") or "")[:16]  # "YYYY-MM-DD HH:MM"
+    if not start:
+        return None
+
+    venue = event.get("venue") or {}
+    venue_name = venue.get("venue") if isinstance(venue.get("venue"), str) else ""
+    if not venue_name and isinstance(venue.get("venue"), dict):
+        venue_name = venue["venue"].get("venue") or ""
+    stage = (venue_name or "unknown_stage").strip()
+
+    start_time = start
+    unique_id = f"{start_time}_{clean_title(stage)}_{title}".lower()
+
+    return {
+        "id": unique_id,
+        "planned_title": title,
+        "start_time": start_time,
+        "stage": stage,
+    }
+
+
+def fetch_schedule(year: int | None = None) -> list[dict[str, str]]:
+    if not year:
+        year = datetime.datetime.now().year
+    start_date = f"{year}-01-01"
+    end_date = f"{year}-12-31"
+
+    rows: list[dict[str, str]] = []
+    seen: set[str] = set()
+    page = 1
+    while True:
+        params = f"?per_page=50&page={page}&start_date={start_date}&end_date={end_date}"
+        response = requests.get(API_BASE + params, headers=HEADERS, timeout=30)
+        response.raise_for_status()
+        data = response.json()
+        events = data.get("events", [])
+        for event in events:
+            row = _event_to_row(event)
+            if not row:
+                continue
+            if row["id"] in seen:
+                continue
+            seen.add(row["id"])
+            rows.append(row)
+        total_pages = int(data.get("total_pages", 1) or 1)
+        if page >= total_pages or not events:
             break
-        heading_tag = parent.find(["h1", "h2", "h3", "h4", "h5", "h6", "strong"])
-        if heading_tag and heading_tag.get_text(strip=True):
-            candidate = heading_tag.get_text(strip=True)
-            if "Datum" not in candidate:
-                return candidate
+        page += 1
 
-    parent_text = node.parent.get_text(separator=" ", strip=True) if node.parent else ""
-    before_datum = parent_text.split("Datum")[0].strip()
-    if before_datum:
-        return before_datum
-    return "Unknown Event"
+    return rows
 
 
-def fetch_schedule() -> list[dict[str, str]]:
-    response = requests.get(URL, headers=HEADERS, timeout=25)
-    response.raise_for_status()
-
-    soup = BeautifulSoup(response.text, "html.parser")
-    festival_year = detect_festival_year(soup)
-    program: defaultdict[str, dict[str, dict[str, str]]] = defaultdict(dict)
-
-    meta_nodes = soup.find_all(
-        lambda tag: tag.name and all(w in tag.get_text() for w in ["Datum", "Tid", "Plats"])
-    )
-
-    for node in meta_nodes:
-        has_matching_child = any(
-            all(w in child.get_text() for w in ["Datum", "Tid", "Plats"])
-            for child in node.find_all()
-        )
-        if has_matching_child:
-            continue
-
-        node_text = node.get_text(separator=" ", strip=True)
-        date_match = re.search(r"Datum\s+(.*?)\s+Tid", node_text)
-        time_match = re.search(r"Tid\s+(.*?)\s+Plats", node_text)
-        place_match = re.search(r"Plats\s+(.*?)\s*(Mer info|$)", node_text)
-
-        if not (date_match and time_match and place_match):
-            continue
-
-        raw_date = date_match.group(1).strip()
-        raw_time = time_match.group(1).strip()
-        stage_name = place_match.group(1).split(",")[0].strip() or "unknown_stage"
-
-        iso_date = parse_date_to_iso(raw_date, festival_year)
-        start_time = f"{iso_date} {raw_time}"
-
-        raw_title = _extract_title_from_node(node)
-        formatted_title = clean_title(raw_title)
-        unique_id = f"{start_time}_{clean_title(stage_name)}_{formatted_title}".lower()
-
-        existing = program[stage_name].get(start_time)
-        if existing:
-            existing["planned_title"] = f"{existing['planned_title']}_and_{formatted_title}"
-            continue
-
-        program[stage_name][start_time] = {
-            "id": unique_id,
-            "planned_title": formatted_title,
-            "start_time": start_time,
-            "stage": stage_name,
-        }
-
-    merged: list[dict[str, str]] = []
-    for _, stage_events in sorted(program.items(), key=lambda x: x[0].lower()):
-        for _, item in sorted(stage_events.items(), key=lambda x: x[0]):
-            merged.append(item)
-
-    return merged
-
-
-async def scrape() -> list[dict[str, str]]:
+async def scrape(year: int | None = None) -> list[dict[str, str]]:
     import asyncio
-    return await asyncio.to_thread(fetch_schedule)
+
+    return await asyncio.to_thread(fetch_schedule, year)

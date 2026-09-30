@@ -44,9 +44,13 @@ async def send_wp_command(
         except asyncio.TimeoutError:
             pass
 
-        # Send command with CRLF terminator
-        payload = command if command.endswith("\r\n") else f"{command}\r\n"
-        writer.write(payload.encode())
+        # Send command with CRLF terminator.
+        # The Web Presenter protocol requires each section to be terminated by a
+        # blank line, so the payload must end with "\r\n\r\n".
+        payload = command.rstrip("\r\n")
+        if not payload.endswith("\r\n\r\n"):
+            payload = f"{payload}\r\n\r\n"
+        writer.write(payload.encode("utf-8"))
         await writer.drain()
 
         # Read response
