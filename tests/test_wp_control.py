@@ -3,11 +3,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.backend.wp_control import (
     _sanitize_wp_value,
+    get_audio_settings,
     get_identity,
+    get_network,
+    get_network_interfaces,
     get_stream_settings,
     get_stream_state,
+    get_ui_settings,
     is_wp_success,
     parse_wp_response,
+    set_audio_settings,
     start_stream,
     stop_stream,
 )
@@ -239,6 +244,94 @@ class TestAsyncWpFunctions:
         result = asyncio.run(_run())
         assert result["Model"] == "Blackmagic Web Presenter HD"
         assert result["Label"] == "WP Main"
+
+    def test_get_network(self):
+        response = (
+            b"\x06\nNETWORK:\nInterface Count: 2\nDefault Interface: 0\n"
+        )
+        reader, writer = _make_mock_reader_writer(response)
+
+        async def _run():
+            with patch("asyncio.open_connection", return_value=(reader, writer)):
+                return await get_network("192.168.1.100")
+
+        result = asyncio.run(_run())
+        assert result["Interface Count"] == "2"
+        assert result["Default Interface"] == "0"
+
+    def test_get_audio_settings(self):
+        response = (
+            b"\x06\nAUDIO SETTINGS:\n"
+            b"Current Monitor Out Audio Source: Auto\n"
+            b"Available Monitor Out Audio Sources: Auto, SDI In, Remote Source\n"
+        )
+        reader, writer = _make_mock_reader_writer(response)
+
+        async def _run():
+            with patch("asyncio.open_connection", return_value=(reader, writer)):
+                return await get_audio_settings("192.168.1.100")
+
+        result = asyncio.run(_run())
+        assert result["Current Monitor Out Audio Source"] == "Auto"
+        assert "Remote Source" in result["Available Monitor Out Audio Sources"]
+
+    def test_get_ui_settings(self):
+        response = (
+            b"\x06\nUI SETTINGS:\n"
+            b"Current Locale: en_US.UTF-8\n"
+            b"Available Audio Meters: PPM -18dB, VU -20dB\n"
+            b"Current Audio Meter: VU -20dB\n"
+        )
+        reader, writer = _make_mock_reader_writer(response)
+
+        async def _run():
+            with patch("asyncio.open_connection", return_value=(reader, writer)):
+                return await get_ui_settings("192.168.1.100")
+
+        result = asyncio.run(_run())
+        assert result["Current Locale"] == "en_US.UTF-8"
+        assert result["Current Audio Meter"] == "VU -20dB"
+
+    def test_get_network_interfaces(self):
+        async def _run():
+            with patch(
+                "app.backend.wp_control.get_network",
+                new=AsyncMock(return_value={"Interface Count": "2"}),
+            ), patch(
+                "app.backend.wp_control.get_wp_block",
+                new=AsyncMock(side_effect=[
+                    {"Name": "Ethernet", "Dynamic IP": "true"},
+                    {"Name": "Mobile", "Dynamic IP": "false"},
+                ]),
+            ):
+                return await get_network_interfaces("192.168.1.100")
+
+        result = asyncio.run(_run())
+        assert result[0]["index"] == 0 and result[0]["Name"] == "Ethernet"
+        assert result[1]["index"] == 1 and result[1]["Name"] == "Mobile"
+
+    def test_set_wp_block_builds_command(self):
+        import app.backend.wp_control as ctrl
+        captured = {}
+
+        async def fake_send(host, command, port=None, timeout=None):
+            captured["command"] = command
+            return "\x06\n"
+
+        reader, writer = _make_mock_reader_writer(b"\x06\n")
+        async def _run():
+            with patch.object(ctrl, "send_wp_command", fake_send):
+                return await set_audio_settings(
+                    "192.168.1.100",
+                    {"Current Monitor Out Audio Source": "Remote Source"},
+                )
+
+        assert asyncio.run(_run()) is True
+        # set_wp_block builds the block body; send_wp_command adds the trailing
+        # blank-line terminator, so the captured command has no trailing CRLFs.
+        assert captured["command"] == (
+            "AUDIO SETTINGS\r\nCurrent Monitor Out Audio Source: Remote Source"
+        )
 
     def test_start_stream(self):
         response = b"\x06\n"

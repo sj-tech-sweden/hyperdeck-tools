@@ -24,10 +24,20 @@ from app.backend.utils import atomic_json_write
 from app.backend.wp_control import (
     WP_PORT,
     check_connectivity,
+    get_audio_settings,
     get_identity,
+    get_network,
+    get_network_interfaces,
     get_stream_settings,
+    get_stream_state,
+    get_ui_settings,
+    get_version,
     reboot_device,
+    set_audio_settings,
+    set_device_label,
+    set_network_interface,
     set_stream_settings,
+    set_ui_settings,
     start_stream,
     stop_stream,
 )
@@ -409,7 +419,47 @@ async def get_device_settings(host: str):
     try:
         settings = await get_stream_settings(host)
         identity = await get_identity(host)
-        return {"host": host, "settings": settings, "identity": identity}
+        version = {}
+        state = {}
+        network = {}
+        audio = {}
+        ui = {}
+        interfaces = []
+        try:
+            version = await get_version(host)
+        except Exception:
+            pass
+        try:
+            state = await get_stream_state(host)
+        except Exception:
+            pass
+        try:
+            network = await get_network(host)
+        except Exception:
+            pass
+        try:
+            audio = await get_audio_settings(host)
+        except Exception:
+            pass
+        try:
+            ui = await get_ui_settings(host)
+        except Exception:
+            pass
+        try:
+            interfaces = await get_network_interfaces(host)
+        except Exception:
+            pass
+        return {
+            "host": host,
+            "settings": settings,
+            "identity": identity,
+            "version": version,
+            "state": state,
+            "network": network,
+            "network_interfaces": interfaces,
+            "audio": audio,
+            "ui": ui,
+        }
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Failed to query device: {e}")
 
@@ -425,6 +475,91 @@ async def update_device_settings(host: str, payload: dict[str, Any]):
         raise
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Failed to update settings: {e}")
+
+
+@app.get("/api/wp/{host}/audio")
+async def get_device_audio(host: str):
+    try:
+        return {"host": host, "audio": await get_audio_settings(host)}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Failed to query device: {e}")
+
+
+@app.post("/api/wp/{host}/audio")
+async def update_device_audio(host: str, payload: dict[str, Any]):
+    try:
+        ok = await set_audio_settings(host, payload)
+        if ok:
+            return {"status": "ok", "host": host}
+        raise HTTPException(status_code=502, detail="Device rejected audio settings update.")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Failed to update audio settings: {e}")
+
+
+@app.get("/api/wp/{host}/ui")
+async def get_device_ui(host: str):
+    try:
+        return {"host": host, "ui": await get_ui_settings(host)}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Failed to query device: {e}")
+
+
+@app.post("/api/wp/{host}/ui")
+async def update_device_ui(host: str, payload: dict[str, Any]):
+    try:
+        ok = await set_ui_settings(host, payload)
+        if ok:
+            return {"status": "ok", "host": host}
+        raise HTTPException(status_code=502, detail="Device rejected UI settings update.")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Failed to update UI settings: {e}")
+
+
+@app.get("/api/wp/{host}/network")
+async def get_device_network(host: str):
+    try:
+        return {
+            "host": host,
+            "network": await get_network(host),
+            "network_interfaces": await get_network_interfaces(host),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Failed to query device: {e}")
+
+
+@app.post("/api/wp/{host}/network")
+async def update_device_network(host: str, payload: dict[str, Any]):
+    try:
+        index = int(payload.get("index", 0))
+        settings = {k: v for k, v in payload.items() if k != "index"}
+        ok = await set_network_interface(host, index, settings)
+        if ok:
+            return {"status": "ok", "host": host, "index": index}
+        raise HTTPException(status_code=502, detail="Device rejected network settings update.")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Failed to update network settings: {e}")
+
+
+@app.post("/api/wp/{host}/label")
+async def update_device_label(host: str, payload: dict[str, Any]):
+    try:
+        label = str(payload.get("label", "")).strip()
+        if not label:
+            raise HTTPException(status_code=400, detail="No label provided.")
+        ok = await set_device_label(host, label)
+        if ok:
+            return {"status": "ok", "host": host}
+        raise HTTPException(status_code=502, detail="Device rejected label update.")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Failed to update label: {e}")
 
 
 @app.get("/api/wp/{host}/identity")

@@ -4617,6 +4617,17 @@ async function wpDiscover() {
     } catch (_) { showToast('Discovery failed', 'error'); }
 }
 
+function wpDsSelectOptions(csv, current) {
+    const items = (csv || '').split(',').map(s => s.trim()).filter(Boolean);
+    if (current && current !== '' && !items.includes(current)) items.unshift(current);
+    return items.map(v => `<option value="${escAttr(v)}"${v === current ? ' selected' : ''}>${escHtml(v)}</option>`).join('');
+}
+
+function wpDsRow(label, value) {
+    if (value === undefined || value === null || value === '') return '';
+    return `<div class="flex justify-between"><span class="text-slate-500">${escHtml(label)}</span><span class="text-white text-right">${escHtml(String(value))}</span></div>`;
+}
+
 async function wpOpenSettings(host) {
     const modal = document.getElementById('wp-settings-modal');
     const hostLabel = document.getElementById('wp-settings-host');
@@ -4634,36 +4645,180 @@ async function wpOpenSettings(host) {
             return;
         }
         const data = await res.json();
-        const settings = data.settings || {};
-        const identity = data.identity || {};
+        const s = data.settings || {};
+        const idn = data.identity || {};
+        const ver = data.version || {};
+        const state = data.state || {};
+        const net = data.network || {};
+        const audio = data.audio || {};
+        const ui = data.ui || {};
+
         let html = '';
+        html += '<div class="text-[11px] uppercase tracking-wide text-slate-400 font-semibold">Device</div>';
+        html += wpDsRow('Model', idn.Model);
+        html += wpDsRow('Label', idn.Label);
+        html += wpDsRow('Unique ID', idn['Unique ID']);
+        html += wpDsRow('Software Release', ver['Software Release']);
+        html += wpDsRow('Software Version', ver['Software Version']);
+        html += wpDsRow('Hardware Version', ver['Hardware Version']);
 
-        if (identity.Model) html += `<div class="flex justify-between"><span class="text-slate-500">Model</span><span class="text-white">${escHtml(identity.Model)}</span></div>`;
-        if (identity.Label) html += `<div class="flex justify-between"><span class="text-slate-500">Label</span><span class="text-white">${escHtml(identity.Label)}</span></div>`;
+        html += '<div class="border-t border-slate-800 my-3"></div>';
+        html += '<div class="text-[11px] uppercase tracking-wide text-slate-400 font-semibold">Stream State</div>';
+        html += wpDsRow('Status', state.status);
+        html += wpDsRow('Bitrate', state.bitrate ? `${state.bitrate} bps` : '');
+        html += wpDsRow('Duration', state.duration);
+        html += wpDsRow('Cache Used', state.cache_used);
 
-        html += '<div class="border-t border-slate-800 my-2"></div>';
+        html += '<div class="border-t border-slate-800 my-3"></div>';
+        html += '<div class="text-[11px] uppercase tracking-wide text-slate-400 font-semibold">Network</div>';
+        html += wpDsRow('Interface Count', net['Interface Count']);
+        html += wpDsRow('Default Interface', net['Default Interface']);
 
-        const displayKeys = ['Video Mode', 'Current Platform', 'Current Server', 'Current Quality Level', 'Current URL'];
-        displayKeys.forEach(key => {
-            if (settings[key]) {
-                html += `<div class="flex justify-between"><span class="text-slate-500">${escHtml(key)}</span><span class="text-white">${escHtml(settings[key])}</span></div>`;
-            }
+        html += '<div class="border-t border-slate-800 my-3"></div>';
+        html += '<div class="text-[11px] uppercase tracking-wide text-slate-400 font-semibold">Device Label</div>';
+        html += `<div class="mt-2"><input id="wpds-label" value="${escAttr(idn.Label || '')}" class="w-full rounded bg-slate-950 border border-slate-800 px-2 py-1.5 text-slate-300 focus:outline-none"></div>`;
+        html += `<button onclick="wpSaveDeviceLabel('${escAttr(host)}')" class="mt-2 text-[11px] bg-indigo-600/20 text-indigo-300 border border-indigo-500/30 rounded px-2 py-1.5 hover:bg-indigo-600 hover:text-white transition cursor-pointer">Save Label</button>`;
+
+        (data.network_interfaces || []).forEach((ifc, idx) => {
+            html += '<div class="border-t border-slate-800 my-3"></div>';
+            html += `<div class="text-[11px] uppercase tracking-wide text-slate-400 font-semibold">Network Interface ${idx}: ${escHtml(ifc.Name || '')}</div>`;
+            html += wpDsRow('MAC Address', ifc['MAC Address']);
+            html += `<div class="mt-2"><label class="text-slate-500 block mb-1">Dynamic IP (DHCP)</label><select id="wpds-net-dhcp-${idx}" class="w-full rounded bg-slate-950 border border-slate-800 px-2 py-1.5 text-slate-300 focus:outline-none"><option value="true"${ifc['Dynamic IP'] === 'true' ? ' selected' : ''}>DHCP (true)</option><option value="false"${ifc['Dynamic IP'] === 'false' ? ' selected' : ''}>Static (false)</option></select></div>`;
+            html += `<div class="mt-2"><label class="text-slate-500 block mb-1">Static Addresses (ip/mask)</label><input id="wpds-net-addr-${idx}" value="${escAttr(ifc['Static Addresses'] || '')}" class="w-full rounded bg-slate-950 border border-slate-800 px-2 py-1.5 text-slate-300 font-mono focus:outline-none"></div>`;
+            html += `<div class="mt-2"><label class="text-slate-500 block mb-1">Static Gateway</label><input id="wpds-net-gw-${idx}" value="${escAttr(ifc['Static Gateway'] || '')}" class="w-full rounded bg-slate-950 border border-slate-800 px-2 py-1.5 text-slate-300 font-mono focus:outline-none"></div>`;
+            html += `<div class="mt-2"><label class="text-slate-500 block mb-1">Static DNS Servers</label><input id="wpds-net-dns-${idx}" value="${escAttr(ifc['Static DNS Servers'] || '')}" class="w-full rounded bg-slate-950 border border-slate-800 px-2 py-1.5 text-slate-300 font-mono focus:outline-none"></div>`;
+            html += `<div class="mt-2"><label class="text-slate-500 block mb-1">Priority</label><input id="wpds-net-prio-${idx}" value="${escAttr(ifc['Priority'] || '')}" class="w-full rounded bg-slate-950 border border-slate-800 px-2 py-1.5 text-slate-300 focus:outline-none"></div>`;
+            html += `<button onclick="wpSaveDeviceNetwork('${escAttr(host)}', ${idx})" class="mt-2 text-[11px] bg-indigo-600/20 text-indigo-300 border border-indigo-500/30 rounded px-2 py-1.5 hover:bg-indigo-600 hover:text-white transition cursor-pointer">Save Interface ${idx}</button>`;
         });
 
-        const listKeys = ['Available Video Modes', 'Available Default Platforms', 'Available Quality Levels'];
-        listKeys.forEach(key => {
-            if (settings[key]) {
-                const items = settings[key].split(',').map(s => s.trim());
-                html += `<div class="mt-2"><span class="text-slate-500 block mb-1">${escHtml(key)}</span><div class="flex flex-wrap gap-1">`;
-                items.forEach(item => { html += `<span class="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-300">${escHtml(item)}</span>`; });
-                html += '</div></div>';
-            }
-        });
+        html += '<div class="border-t border-slate-800 my-3"></div>';
+        html += '<div class="text-[11px] uppercase tracking-wide text-slate-400 font-semibold">Audio</div>';
+        html += `<div class="mt-2"><label class="text-slate-500 block mb-1">Monitor Out Audio Source</label><select id="wpds-audio-source" class="w-full rounded bg-slate-950 border border-slate-800 px-2 py-1.5 text-slate-300 focus:outline-none">${wpDsSelectOptions(audio['Available Monitor Out Audio Sources'], audio['Current Monitor Out Audio Source'])}</select></div>`;
+        html += `<button onclick="wpSaveDeviceAudio('${escAttr(host)}')" class="mt-2 text-[11px] bg-indigo-600/20 text-indigo-300 border border-indigo-500/30 rounded px-2 py-1.5 hover:bg-indigo-600 hover:text-white transition cursor-pointer">Save Audio</button>`;
 
-        content.innerHTML = html || '<div class="text-slate-500">No settings data returned.</div>';
+        html += '<div class="border-t border-slate-800 my-3"></div>';
+        html += '<div class="text-[11px] uppercase tracking-wide text-slate-400 font-semibold">UI</div>';
+        html += `<div class="mt-2"><label class="text-slate-500 block mb-1">Locale</label><select id="wpds-ui-locale" class="w-full rounded bg-slate-950 border border-slate-800 px-2 py-1.5 text-slate-300 focus:outline-none">${wpDsSelectOptions(ui['Available Locales'], ui['Current Locale'])}</select></div>`;
+        html += `<div class="mt-2"><label class="text-slate-500 block mb-1">Audio Meter</label><select id="wpds-ui-meter" class="w-full rounded bg-slate-950 border border-slate-800 px-2 py-1.5 text-slate-300 focus:outline-none">${wpDsSelectOptions(ui['Available Audio Meters'], ui['Current Audio Meter'])}</select></div>`;
+        html += `<button onclick="wpSaveDeviceUi('${escAttr(host)}')" class="mt-2 text-[11px] bg-indigo-600/20 text-indigo-300 border border-indigo-500/30 rounded px-2 py-1.5 hover:bg-indigo-600 hover:text-white transition cursor-pointer">Save UI</button>`;
+
+        html += '<div class="border-t border-slate-800 my-3"></div>';
+        html += '<div class="text-[11px] uppercase tracking-wide text-slate-400 font-semibold">Stream Settings (editable)</div>';
+        html += `
+            <div class="grid grid-cols-2 gap-2 mt-2">
+                <div><label class="text-slate-500 block mb-1">Video Mode</label><select id="wpds-videomode" class="w-full rounded bg-slate-950 border border-slate-800 px-2 py-1.5 text-slate-300 focus:outline-none">${wpDsSelectOptions(s['Available Video Modes'], s['Video Mode'])}</select></div>
+                <div><label class="text-slate-500 block mb-1">Quality Level</label><select id="wpds-quality" class="w-full rounded bg-slate-950 border border-slate-800 px-2 py-1.5 text-slate-300 focus:outline-none">${wpDsSelectOptions(s['Available Quality Levels'], s['Current Quality Level'])}</select></div>
+                <div><label class="text-slate-500 block mb-1">Platform</label><select id="wpds-platform" class="w-full rounded bg-slate-950 border border-slate-800 px-2 py-1.5 text-slate-300 focus:outline-none">${wpDsSelectOptions([...(s['Available Default Platforms'] || '').split(','), ...(s['Available Custom Platforms'] || '').split(',')].join(','), s['Current Platform'])}</select></div>
+                <div><label class="text-slate-500 block mb-1">Server</label><select id="wpds-server" class="w-full rounded bg-slate-950 border border-slate-800 px-2 py-1.5 text-slate-300 focus:outline-none">${wpDsSelectOptions(s['Available Servers'], s['Current Server'])}</select></div>
+            </div>
+            <div class="mt-2"><label class="text-slate-500 block mb-1">Current URL</label><input id="wpds-url" value="${escAttr(s['Current URL'] || '')}" class="w-full rounded bg-slate-950 border border-slate-800 px-2 py-1.5 text-slate-300 focus:outline-none font-mono"></div>
+            <div class="mt-2"><label class="text-slate-500 block mb-1">Stream Key</label><input id="wpds-key" value="${escAttr(s['Stream Key'] || '')}" class="w-full rounded bg-slate-950 border border-slate-800 px-2 py-1.5 text-slate-300 focus:outline-none font-mono"></div>
+            <div class="mt-2"><label class="text-slate-500 block mb-1">Password</label><input id="wpds-password" type="password" value="${escAttr(s['Password'] || '')}" class="w-full rounded bg-slate-950 border border-slate-800 px-2 py-1.5 text-slate-300 focus:outline-none font-mono"></div>
+        `;
+
+        html += '<div class="flex gap-2 mt-4">';
+        html += `<button onclick="wpSaveDeviceSettings('${escAttr(host)}')" class="flex-1 text-[11px] bg-indigo-600/20 text-indigo-300 border border-indigo-500/30 rounded px-2 py-1.5 hover:bg-indigo-600 hover:text-white transition cursor-pointer">Save Settings</button>`;
+        html += `<button onclick="wpOpenSettings('${escAttr(host)}')" class="text-[11px] bg-slate-800 text-slate-300 border border-slate-700 rounded px-2.5 py-1.5 hover:bg-slate-700 transition cursor-pointer">Refresh</button>`;
+        html += '</div>';
+        html += '<p id="wpds-result" class="text-[10px] text-slate-400 mt-2 whitespace-pre-wrap"></p>';
+
+        content.innerHTML = html;
     } catch (_) {
         content.innerHTML = '<div class="text-rose-400">Could not reach device.</div>';
     }
+}
+
+async function wpSaveDeviceSettings(host) {
+    const resultEl = document.getElementById('wpds-result');
+    const getVal = id => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
+    const payload = {
+        'Video Mode': getVal('wpds-videomode'),
+        'Current Platform': getVal('wpds-platform'),
+        'Current Server': getVal('wpds-server'),
+        'Current Quality Level': getVal('wpds-quality'),
+        'Current URL': getVal('wpds-url'),
+        'Stream Key': getVal('wpds-key'),
+        'Password': getVal('wpds-password'),
+    };
+    // Drop empty values so we only push what the user touched meaningfully.
+    const cleaned = Object.fromEntries(Object.entries(payload).filter(([, v]) => v !== ''));
+    if (Object.keys(cleaned).length === 0) {
+        if (resultEl) resultEl.textContent = 'Nothing to save (all fields empty).';
+        return;
+    }
+    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/${host}/settings` : `/api/wp/${host}/settings`;
+    if (resultEl) resultEl.textContent = 'Saving...';
+    try {
+        const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cleaned) });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+            if (resultEl) resultEl.textContent = `Save failed: ${data.detail || 'device rejected settings'}`;
+            showToast('Save failed', 'error');
+            return;
+        }
+        if (resultEl) resultEl.textContent = 'Saved. Reloading current values...';
+        showToast(`Settings saved to ${host}`, 'success');
+        // Reload to reflect applied values (note: device may mask password).
+        setTimeout(() => wpOpenSettings(host), 600);
+    } catch (e) {
+        if (resultEl) resultEl.textContent = 'Save request failed.';
+        showToast('Save request failed', 'error');
+    }
+}
+
+async function wpPostDeviceSection(host, section, payload) {
+    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/${host}/${section}` : `/api/wp/${host}/${section}`;
+    const resultEl = document.getElementById('wpds-result');
+    if (resultEl) resultEl.textContent = 'Saving...';
+    try {
+        const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+            if (resultEl) resultEl.textContent = `Save failed: ${data.detail || 'device rejected settings'}`;
+            showToast('Save failed', 'error');
+            return;
+        }
+        if (resultEl) resultEl.textContent = 'Saved. Reloading current values...';
+        showToast(`Saved to ${host}`, 'success');
+        setTimeout(() => wpOpenSettings(host), 600);
+    } catch (e) {
+        if (resultEl) resultEl.textContent = 'Save request failed.';
+        showToast('Save request failed', 'error');
+    }
+}
+
+async function wpSaveDeviceLabel(host) {
+    const el = document.getElementById('wpds-label');
+    if (!el) return;
+    const label = el.value.trim();
+    if (!label) { showToast('Label is empty', 'warning'); return; }
+    await wpPostDeviceSection(host, 'label', { label });
+}
+
+async function wpSaveDeviceNetwork(host, idx) {
+    const getVal = id => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
+    const payload = {
+        index: idx,
+        'Dynamic IP': getVal(`wpds-net-dhcp-${idx}`),
+        'Static Addresses': getVal(`wpds-net-addr-${idx}`),
+        'Static Gateway': getVal(`wpds-net-gw-${idx}`),
+        'Static DNS Servers': getVal(`wpds-net-dns-${idx}`),
+        'Priority': getVal(`wpds-net-prio-${idx}`),
+    };
+    await wpPostDeviceSection(host, 'network', payload);
+}
+
+async function wpSaveDeviceAudio(host) {
+    const el = document.getElementById('wpds-audio-source');
+    if (!el) return;
+    await wpPostDeviceSection(host, 'audio', { 'Current Monitor Out Audio Source': el.value });
+}
+
+async function wpSaveDeviceUi(host) {
+    const locale = document.getElementById('wpds-ui-locale');
+    const meter = document.getElementById('wpds-ui-meter');
+    if (!locale || !meter) return;
+    await wpPostDeviceSection(host, 'ui', { 'Current Locale': locale.value, 'Current Audio Meter': meter.value });
 }
 
 function closeWpSettings() {

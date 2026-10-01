@@ -110,6 +110,84 @@ async def get_stream_settings(host: str, port: int = WP_PORT) -> dict[str, Any]:
     return parse_wp_response(raw)
 
 
+async def get_network(host: str, port: int = WP_PORT) -> dict[str, Any]:
+    """Query network configuration from a Web Presenter."""
+    raw = await send_wp_command(host, "NETWORK:", port=port)
+    return parse_wp_response(raw)
+
+
+async def get_wp_block(host: str, header: str, port: int = WP_PORT) -> dict[str, Any]:
+    """Query a protocol block (e.g. 'AUDIO SETTINGS:') and parse the response."""
+    raw = await send_wp_command(host, header, port=port)
+    return parse_wp_response(raw)
+
+
+async def set_wp_block(
+    host: str,
+    header: str,
+    settings: dict[str, str],
+    port: int = WP_PORT,
+) -> bool:
+    """Set key/value pairs within a protocol block and return success."""
+    lines = [header.rstrip(":")]
+    for key, value in settings.items():
+        safe_key = _sanitize_wp_value(str(key)).replace(":", "")
+        safe_value = _sanitize_wp_value(str(value))
+        lines.append(f"{safe_key}: {safe_value}")
+    command = "\r\n".join(lines)
+    raw = await send_wp_command(host, command, port=port)
+    return is_wp_success(raw)
+
+
+async def get_network_interfaces(host: str, port: int = WP_PORT) -> list[dict[str, Any]]:
+    """Query all network interface blocks (NETWORK INTERFACE 0..n)."""
+    net = await get_network(host, port=port)
+    try:
+        count = int(net.get("Interface Count", "0") or "0")
+    except ValueError:
+        count = 0
+    interfaces: list[dict[str, Any]] = []
+    for i in range(count):
+        iface = await get_wp_block(host, f"NETWORK INTERFACE {i}:", port=port)
+        iface["index"] = i
+        interfaces.append(iface)
+    return interfaces
+
+
+async def get_audio_settings(host: str, port: int = WP_PORT) -> dict[str, Any]:
+    """Query monitor/audio settings from a Web Presenter."""
+    return await get_wp_block(host, "AUDIO SETTINGS:", port=port)
+
+
+async def get_ui_settings(host: str, port: int = WP_PORT) -> dict[str, Any]:
+    """Query UI settings (locale, audio meter type) from a Web Presenter."""
+    return await get_wp_block(host, "UI SETTINGS:", port=port)
+
+
+async def set_audio_settings(
+    host: str, settings: dict[str, str], port: int = WP_PORT
+) -> bool:
+    return await set_wp_block(host, "AUDIO SETTINGS:", settings, port=port)
+
+
+async def set_ui_settings(
+    host: str, settings: dict[str, str], port: int = WP_PORT
+) -> bool:
+    return await set_wp_block(host, "UI SETTINGS:", settings, port=port)
+
+
+async def set_network_interface(
+    host: str, index: int, settings: dict[str, str], port: int = WP_PORT
+) -> bool:
+    return await set_wp_block(host, f"NETWORK INTERFACE {index}:", settings, port=port)
+
+
+async def set_device_label(
+    host: str, label: str, port: int = WP_PORT
+) -> bool:
+    return await set_wp_block(host, "IDENTITY:", {"Label": label}, port=port)
+
+
 async def get_identity(host: str, port: int = WP_PORT) -> dict[str, Any]:
     """Query device identity (model, label, unique ID)."""
     raw = await send_wp_command(host, "IDENTITY:", port=port)
