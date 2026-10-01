@@ -12,6 +12,7 @@ import threading
 from typing import Any
 
 from app.backend.utils import atomic_json_write
+from app.backend.wp_audit import log_wp_apply
 from app.backend.wp_control import (
     WP_PORT,
     get_identity,
@@ -183,11 +184,17 @@ def resolve_wp_targets(config: dict[str, Any], target: dict[str, Any]) -> list[d
     """
     role = str(target.get("role", "") or "").strip().lower()
     stage = str(target.get("stage", "") or "").strip()
-    hosts_filter = {str(h).strip() for h in (target.get("hosts") or [])}
+    raw_hosts = target.get("hosts")
 
     presenters = _enumerate_presenters(config)
-    if hosts_filter:
-        return [p for p in presenters if p["host"] in hosts_filter]
+    # Only honor an explicit, non-empty hosts list. An explicitly empty list
+    # means "no targets" (not "all"), and an absent key falls through to the
+    # role/stage filters below.
+    if raw_hosts is not None:
+        hosts_filter = {str(h).strip() for h in raw_hosts}
+        if hosts_filter:
+            return [p for p in presenters if p["host"] in hosts_filter]
+        return []
 
     result = []
     for p in presenters:
@@ -364,15 +371,20 @@ async def apply_settings_to_targets(
         state = global_presenter_state_cache.get(host, {})
         if state.get("connected") and state.get("streaming"):
             enqueue_wp_pending_change(host, device_settings)
+            log_wp_apply(host, "apply_targets", details=device_settings, status="queued",
+                         error="device streaming")
             results.append({"host": host, "name": device["name"], "status": "queued", "reason": "device streaming"})
             continue
         try:
             ok = await set_stream_settings(host, device_settings, port=device["port"])
             if ok:
+                log_wp_apply(host, "apply_targets", details=device_settings)
                 results.append({"host": host, "name": device["name"], "status": "applied"})
             else:
+                log_wp_apply(host, "apply_targets", details=device_settings, status="rejected")
                 results.append({"host": host, "name": device["name"], "status": "rejected"})
         except Exception as e:  # noqa: BLE001
+            log_wp_apply(host, "apply_targets", details=device_settings, status="error", error=str(e))
             results.append({"host": host, "name": device["name"], "status": "error", "error": str(e)})
     return {"targets": len(targets), "results": results}
 

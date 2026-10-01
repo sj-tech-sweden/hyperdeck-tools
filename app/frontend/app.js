@@ -4650,6 +4650,8 @@ async function wpOpenSettings(host) {
         const net = data.network || {};
         const audio = data.audio || {};
         const ui = data.ui || {};
+        // Stash the streaming state so the save handler can guard live devices.
+        window.wpDsState = state;
 
         let html = '';
         html += '<div class="text-[11px] uppercase tracking-wide text-slate-400 font-semibold">Device</div>';
@@ -4743,6 +4745,19 @@ async function wpSaveDeviceSettings(host) {
     if (Object.keys(cleaned).length === 0) {
         if (resultEl) resultEl.textContent = 'Nothing to save (all fields empty).';
         return;
+    }
+    // Guard against disrupting a live broadcast: if the device is currently
+    // streaming, require an explicit confirmation before we override it.
+    const streaming = String((window.wpDsState || {}).Streaming || '').trim().toLowerCase() === 'on';
+    if (streaming) {
+        const ok = window.confirm(
+            'This device is currently LIVE. Changing stream settings may interrupt the broadcast. Continue?'
+        );
+        if (!ok) {
+            if (resultEl) resultEl.textContent = 'Cancelled: device is live.';
+            return;
+        }
+        cleaned.force = true;
     }
     const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/${host}/settings` : `/api/wp/${host}/settings`;
     if (resultEl) resultEl.textContent = 'Saving...';

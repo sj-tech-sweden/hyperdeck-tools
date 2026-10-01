@@ -21,6 +21,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.backend.discovery import get_active_interface_network
 from app.backend.utils import atomic_json_write
+from app.backend.wp_audit import log_wp_apply
 from app.backend.wp_control import (
     WP_PORT,
     check_connectivity,
@@ -42,6 +43,7 @@ from app.backend.wp_control import (
     stop_stream,
 )
 from app.backend.wp_daemon import (
+    _enumerate_presenters,
     _resolve_event_stream_config,
     apply_settings_to_targets,
     global_presenter_state_cache,
@@ -60,7 +62,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "wp_stages": {},
     "wp_presenter_roles": {},
     "wp_default_quality": "Streaming Medium",
-    "wp_auto_sync_interval": 2,
     "wp_auto_apply_event": False,
     "destinations": [],
     "filename_template": "{year}{month}{day}_{planned_title}",
@@ -89,10 +90,6 @@ def _normalize_config(config: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(merged.get("wp_presenter_roles"), dict):
         merged["wp_presenter_roles"] = {}
     merged["wp_default_quality"] = str(merged.get("wp_default_quality") or "Streaming Medium")
-    try:
-        merged["wp_auto_sync_interval"] = max(1, int(merged.get("wp_auto_sync_interval", 2)))
-    except (TypeError, ValueError):
-        merged["wp_auto_sync_interval"] = 2
     merged["wp_auto_apply_event"] = bool(merged.get("wp_auto_apply_event", False))
     return merged
 
@@ -155,7 +152,6 @@ async def get_wp_config():
     return {
         "webpresenters": config.get("webpresenters", {}),
         "wp_default_quality": config.get("wp_default_quality", "Streaming Medium"),
-        "wp_auto_sync_interval": config.get("wp_auto_sync_interval", 2),
         "wp_auto_apply_event": config.get("wp_auto_apply_event", False),
     }
 
@@ -167,8 +163,6 @@ async def save_wp_config(payload: dict[str, Any]):
         config["webpresenters"] = payload["webpresenters"]
     if "wp_default_quality" in payload:
         config["wp_default_quality"] = payload["wp_default_quality"]
-    if "wp_auto_sync_interval" in payload:
-        config["wp_auto_sync_interval"] = payload["wp_auto_sync_interval"]
     if "wp_auto_apply_event" in payload:
         config["wp_auto_apply_event"] = bool(payload["wp_auto_apply_event"])
     atomic_json_write(CONFIG_FILE, _normalize_config(config))
@@ -382,10 +376,23 @@ def _lookup_wp_port(host: str, config: dict[str, Any]) -> int:
     return WP_PORT
 
 
+def _wp_action_hosts(config: dict[str, Any]) -> list[str]:
+    """Hosts to act on for start-all/stop-all.
+
+    Prefer the live state cache; if it hasn't been populated yet (e.g. right
+    after startup before the monitor loop runs), fall back to the configured
+    presenters so the buttons still work.
+    """
+    hosts = list(global_presenter_state_cache.keys())
+    if not hosts:
+        hosts = [p["host"] for p in _enumerate_presenters(config) if p.get("host")]
+    return hosts
+
+
 @app.post("/api/wp/stream/start-all")
 async def wp_stream_start_all():
     config = await _get_config()
-    hosts = list(global_presenter_state_cache.keys())
+    hosts = _wp_action_hosts(config)
     results = []
     for host in hosts:
         try:
@@ -400,7 +407,7 @@ async def wp_stream_start_all():
 @app.post("/api/wp/stream/stop-all")
 async def wp_stream_stop_all():
     config = await _get_config()
-    hosts = list(global_presenter_state_cache.keys())
+    hosts = _wp_action_hosts(config)
     results = []
     for host in hosts:
         try:
@@ -466,14 +473,27 @@ async def get_device_settings(host: str):
 
 @app.post("/api/wp/{host}/settings")
 async def update_device_settings(host: str, payload: dict[str, Any]):
+    # Pop the client-side guard flag so it isn't forwarded to the device.
+    force = bool(payload.pop("force", False))
     try:
+        streaming = "on" == str((await get_stream_state(host)).get("Streaming", "")).strip().lower()
+        if streaming and not force:
+            log_wp_apply(host, "device_settings", details=payload, status="blocked",
+                         error="device streaming; force required")
+            raise HTTPException(
+                status_code=409,
+                detail="Device is currently streaming. Stop the stream first, or resend with force=true to override.",
+            )
         ok = await set_stream_settings(host, payload)
         if ok:
+            log_wp_apply(host, "device_settings", details=payload)
             return {"status": "ok", "host": host}
+        log_wp_apply(host, "device_settings", details=payload, status="rejected")
         raise HTTPException(status_code=502, detail="Device rejected settings update.")
     except HTTPException:
         raise
     except Exception as e:
+        log_wp_apply(host, "device_settings", details=payload, status="error", error=str(e))
         raise HTTPException(status_code=502, detail=f"Failed to update settings: {e}")
 
 
@@ -490,11 +510,13 @@ async def update_device_audio(host: str, payload: dict[str, Any]):
     try:
         ok = await set_audio_settings(host, payload)
         if ok:
+            log_wp_apply(host, "device_audio", details=payload)
             return {"status": "ok", "host": host}
         raise HTTPException(status_code=502, detail="Device rejected audio settings update.")
     except HTTPException:
         raise
     except Exception as e:
+        log_wp_apply(host, "device_audio", details=payload, status="error", error=str(e))
         raise HTTPException(status_code=502, detail=f"Failed to update audio settings: {e}")
 
 
@@ -511,11 +533,13 @@ async def update_device_ui(host: str, payload: dict[str, Any]):
     try:
         ok = await set_ui_settings(host, payload)
         if ok:
+            log_wp_apply(host, "device_ui", details=payload)
             return {"status": "ok", "host": host}
         raise HTTPException(status_code=502, detail="Device rejected UI settings update.")
     except HTTPException:
         raise
     except Exception as e:
+        log_wp_apply(host, "device_ui", details=payload, status="error", error=str(e))
         raise HTTPException(status_code=502, detail=f"Failed to update UI settings: {e}")
 
 
@@ -538,11 +562,13 @@ async def update_device_network(host: str, payload: dict[str, Any]):
         settings = {k: v for k, v in payload.items() if k != "index"}
         ok = await set_network_interface(host, index, settings)
         if ok:
+            log_wp_apply(host, "device_network", details={"index": index, **settings})
             return {"status": "ok", "host": host, "index": index}
         raise HTTPException(status_code=502, detail="Device rejected network settings update.")
     except HTTPException:
         raise
     except Exception as e:
+        log_wp_apply(host, "device_network", details={"index": index}, status="error", error=str(e))
         raise HTTPException(status_code=502, detail=f"Failed to update network settings: {e}")
 
 
@@ -554,6 +580,7 @@ async def update_device_label(host: str, payload: dict[str, Any]):
             raise HTTPException(status_code=400, detail="No label provided.")
         ok = await set_device_label(host, label)
         if ok:
+            log_wp_apply(host, "device_label", details={"label": label})
             return {"status": "ok", "host": host}
         raise HTTPException(status_code=502, detail="Device rejected label update.")
     except HTTPException:

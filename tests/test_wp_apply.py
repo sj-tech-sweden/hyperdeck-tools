@@ -32,7 +32,8 @@ def test_resolve_wp_targets_combo(wp_paths):
         "wp_presenter_roles": {"A": "primary", "B": "backup", "C": "primary"},
         "wp_stages": {"A": "Stage1", "B": "Stage1", "C": "Stage2"},
     }
-    names = lambda t: sorted(p["name"] for p in daemon.resolve_wp_targets(config, t))
+    def names(t):
+        return sorted(p["name"] for p in daemon.resolve_wp_targets(config, t))
     assert names({}) == ["A", "B", "C"]
     assert names({"role": "primary"}) == ["A", "C"]
     assert names({"stage": "Stage1"}) == ["A", "B"]
@@ -43,6 +44,8 @@ def test_resolve_wp_targets_combo(wp_paths):
     assert names({"hosts": ["10.0.0.3"]}) == ["C"]
     assert names({"hosts": ["9.9.9.9"]}) == []
     assert names({"role": "primary", "hosts": ["10.0.0.3"]}) == ["C"]
+    # an explicitly empty hosts list matches nothing (not "all")
+    assert names({"hosts": []}) == []
 
 
 def test_build_wp_device_settings_rtmp_role_aware():
