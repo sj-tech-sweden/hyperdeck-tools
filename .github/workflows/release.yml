@@ -1,90 +1,78 @@
 name: Release
 
+# Driven by semantic version labels on a PR (major/minor/patch) or a manual
+# dispatch. Computes the next semver from the latest `v*` tag and creates a
+# GitHub Release. Release notes are auto-generated from the Conventional Commits
+# since the previous tag. Pushing the new tag triggers `build.yml`, which attaches
+# the Docker image and standalone binaries to the release.
+
 on:
-  push:
-    tags: ["v*"]
+  pull_request:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      release_type:
+        description: "Release type"
+        required: true
+        default: "patch"
+        type: choice
+        options:
+          - major
+          - minor
+          - patch
 
 permissions:
   contents: write
-  packages: write
 
 jobs:
-  # ── Docker image → GHCR (multi-arch: amd64 + arm64) ──────────────────
-  docker:
-    name: Docker
+  release:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.pull_request.labels.*.name, 'major') ||
+      contains(github.event.pull_request.labels.*.name, 'minor') ||
+      contains(github.event.pull_request.labels.*.name, 'patch')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-
-      - uses: docker/setup-qemu-action@v4
         with:
-          platforms: linux/amd64,linux/arm64
+          fetch-depth: 0
 
-      - uses: docker/setup-buildx-action@v4
+      - name: Determine release type
+        id: type
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "type=${{ github.event.inputs.release_type }}" >> "$GITHUB_OUTPUT"
+          else
+            labels=$(jq -r '.pull_request.labels[].name' "$GITHUB_EVENT_PATH")
+            if echo "$labels" | grep -qx major; then type=major
+            elif echo "$labels" | grep -qx minor; then type=minor
+            else type=patch; fi
+            echo "type=$type" >> "$GITHUB_OUTPUT"
+          fi
 
-      - uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Compute next version
+        id: version
+        run: |
+          latest=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          latest="${latest#v}"
+          IFS='.' read -r maj min pat <<< "$latest"
+          maj="${maj:-0}"; min="${min:-0}"; pat="${pat:-0}"
+          case "${{ steps.type.outputs.type }}" in
+            major) maj=$((maj + 1)); min=0; pat=0 ;;
+            minor) min=$((min + 1)); pat=0 ;;
+            patch) pat=$((pat + 1)) ;;
+          esac
+          echo "version=v$maj.$min.$pat" >> "$GITHUB_OUTPUT"
+          echo "Next version: v$maj.$min.$pat"
 
-      - uses: docker/metadata-action@v6
-        id: meta
-        with:
-          images: ghcr.io/${{ github.repository }}
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest
-
-      - uses: docker/build-push-action@v7
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-  # ── macOS standalone binary ──────────────────────────────────────────
-  macos:
-    name: macOS
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.14"
-
-      - run: pip install -r requirements.txt pyinstaller
-
-      - name: Build binary
-        run: pyinstaller --onefile --name hyperdeck-tools --add-data "app/frontend:app/frontend" --add-data "app/backend/plugins:app/backend/plugins" --add-data "app/backend/model_capability_profiles.json:app/backend" run.py
-
-      - name: Upload to release
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
-          files: dist/hyperdeck-tools
-
-  # ── Windows standalone binary ────────────────────────────────────────
-  windows:
-    name: Windows
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.14"
-
-      - run: pip install -r requirements.txt pyinstaller
-
-      - name: Build binary
-        run: pyinstaller --onefile --name hyperdeck-tools.exe --add-data "app/frontend;app/frontend" --add-data "app/backend/plugins;app/backend/plugins" --add-data "app/backend/model_capability_profiles.json;app/backend" run.py
-
-      - name: Upload to release
-        uses: softprops/action-gh-release@v3
-        with:
-          files: dist/hyperdeck-tools.exe
+          tag_name: ${{ steps.version.outputs.version }}
+          name: ${{ steps.version.outputs.version }}
+          generate_release_notes: true
+          body: |
+            Automated release cut from Conventional Commits. The changelog below is
+            generated from the commits since the previous tag.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
