@@ -59,6 +59,15 @@ fix/hyperdeck-line-terminator
 chore/release-workflow
 ```
 
+## Pull requests
+
+- `main` is the protected integration branch — never push to it directly.
+- Develop on a `type/...` branch and open a pull request against `main`.
+- Keep each PR focused on one logical change; the commit(s) on the branch must
+  follow the Conventional Commits rules above.
+- Once a PR is merged, the release is cut from it (see Release process): label the
+  merged PR `major` / `minor` / `patch`, or run the Release workflow manually.
+
 ## Release process
 
 Releases are driven by **semantic version labels** on a pull request
