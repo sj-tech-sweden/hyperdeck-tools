@@ -4,16 +4,17 @@ This document explains how to trigger releases, what gets built, and how to use 
 
 ## How It Works
 
-Releases are driven by **semantic version labels** on a pull request. The
-two-workflow split is:
+Releases are driven by **semantic version labels** on a merged PR (or a manual
+dispatch). The single **`release.yml`** workflow:
 
-- **`release.yml`** — triggered by a `major` / `minor` / `patch` label on a PR
-  (or a manual `workflow_dispatch`). It computes the next version from the latest
-  `v*` tag and creates a GitHub Release. Release notes are auto-generated from the
-  [Conventional Commits](https://www.conventionalcommits.org/) since the previous
-  tag.
-- **`build.yml`** — triggered by the tag that `release.yml` pushes. It builds the
-  three artifacts and attaches them to the release:
+- computes the next version from the latest `v*` tag,
+- builds a changelog from the [Conventional Commits](https://www.conventionalcommits.org/)
+  since the previous tag (grouped into Features / Bug Fixes / Dependencies / Other,
+  matching the stockwire-rental style),
+- creates the GitHub Release with those notes, then
+- builds and attaches the three artifacts in the same run (chained via `needs`),
+  so the Docker image and binaries are produced reliably without depending on a
+  separate tag-push trigger:
 
 | Artifact | Platform | Format |
 | --- | --- | --- |
@@ -27,8 +28,8 @@ two-workflow split is:
 
 Add one of `major`, `minor`, or `patch` to the pull request you want to release.
 The highest-priority present label wins (`major` > `minor` > `patch`). The
-Release workflow computes the next version and creates the release; the new tag
-then kicks off `build.yml`.
+Release workflow computes the next version, creates the release, and builds the
+Docker image + binaries in the same run.
 
 ### 2. Manual dispatch
 
@@ -40,8 +41,7 @@ Run the **Release** workflow manually from the Actions tab and choose a
 1. **Release** — `release.yml` computes the next semver, builds a changelog from
    the Conventional Commits since the last tag (grouped into Features / Bug Fixes /
    Dependencies / Other, matching the stockwire-rental style), creates the GitHub
-   Release with those notes, and pushes the `vX.Y.Z` tag.
-2. **Build** — `build.yml` (on the new tag) runs three jobs:
+   Release with those notes, then builds and attaches the artifacts:
    - **Docker** — Builds a multi-arch image (`linux/amd64` + `linux/arm64`) and pushes it to GitHub Container Registry
    - **macOS** — Builds a standalone binary with PyInstaller and attaches it to the release
    - **Windows** — Builds a standalone `.exe` with PyInstaller and attaches it to the release
