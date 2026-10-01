@@ -19,7 +19,7 @@ dispatch). The single **`release.yml`** workflow:
 | Artifact | Platform | Format |
 | --- | --- | --- |
 | Docker image | Linux (amd64 + arm64) | Multi-arch image on GHCR |
-| Standalone binary | macOS (Apple Silicon) | Single executable file |
+| Standalone binary | macOS (Apple Silicon) | `.zip` archive (`hyperdeck-tools-macos-<arch>.zip`) |
 | Standalone binary | Windows (x64) | Single `.exe` file |
 
 ## Triggering a Release
@@ -108,14 +108,21 @@ docker inspect ghcr.io/sj-tech-sweden/hyperdeck-tools:latest | grep Architecture
 
 ### macOS
 
-1. Download `hyperdeck-tools` from the release page
-2. Make it executable:
+The macOS asset is a `.zip` named `hyperdeck-tools-macos-<arch>.zip` (e.g.
+`hyperdeck-tools-macos-arm64.zip` on Apple Silicon).
+
+1. Download `hyperdeck-tools-macos-<arch>.zip` from the release page
+2. Unzip it:
    ```bash
-   chmod +x hyperdeck-tools
+   unzip hyperdeck-tools-macos-<arch>.zip
    ```
-3. Run it:
+3. Make it executable:
    ```bash
-   ./hyperdeck-tools
+   chmod +x hyperdeck-tools-macos-<arch>
+   ```
+4. Run it:
+   ```bash
+   ./hyperdeck-tools-macos-<arch>
    ```
 
 ### Windows
@@ -167,7 +174,8 @@ The `latest` tag always points to the most recent release.
 
 - macOS may block unsigned binaries. Right-click → Open, or remove quarantine:
   ```bash
-  xattr -d com.apple.quarantine ./hyperdeck-tools
+  xattr -d com.apple.quarantine ./hyperdeck-tools-macos-<arch>
+  ```
   ```
 
 ### Binary can't find config.yaml
