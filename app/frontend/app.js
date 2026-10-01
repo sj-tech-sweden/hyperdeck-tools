@@ -4076,17 +4076,15 @@ async function loadPluginManagerSystem() {
             selector.addEventListener('change', async () => {
                 const nextSelection = selector.value;
                 const switchedToManual = currentPluginSelection && !nextSelection;
-                currentPluginSelection = nextSelection;
-                localStorage.setItem(PLUGIN_SELECTION_STORAGE_KEY, nextSelection);
                 if (switchedToManual) {
                     await clearScheduleForManualMode();
                 }
-                updatePluginDetails();
+                applyPluginSelection(nextSelection);
             });
             selector.dataset.bound = 'true';
         }
         currentPluginSelection = selector.value;
-        updatePluginDetails();
+        applyPluginSelection(selector.value);
 
         const scopeFilter = document.getElementById('schedule-scope-filter');
         if (!scopeFilter.dataset.bound) {
@@ -5671,29 +5669,60 @@ async function wpLoadPluginSelector() {
         });
         if (!select.dataset.bound) {
             select.addEventListener('change', () => {
-                const desc = document.getElementById('wp-plugin-description');
-                const syncBtn = document.getElementById('wp-btn-plugin-sync');
-                const uploadPanel = document.getElementById('wp-plugin-upload-panel');
-                const plugin = (typeof availablePlugins !== 'undefined' ? availablePlugins : []).find(pl => pl.name === select.value);
-                renderPluginInputs('wp-plugin-inputs', 'wp-plugin', plugin?.inputs || []);
-                if (!select.value) {
-                    if (desc) desc.textContent = 'No plugin selected. Manual schedule editing is active.';
-                    if (syncBtn) { syncBtn.disabled = false; syncBtn.textContent = 'Fetch & Sync Schedule'; }
-                    if (uploadPanel) uploadPanel.classList.add('hidden');
-                } else {
-                    if (desc) desc.textContent = plugin?.description || '';
-                    if (plugin?.supports_upload) {
-                        if (syncBtn) { syncBtn.disabled = true; syncBtn.textContent = 'Use Upload Below'; }
-                        if (uploadPanel) uploadPanel.classList.remove('hidden');
-                    } else {
-                        if (syncBtn) { syncBtn.disabled = false; syncBtn.textContent = 'Fetch & Sync Schedule'; }
-                        if (uploadPanel) uploadPanel.classList.add('hidden');
-                    }
-                }
+                applyPluginSelection(select.value);
             });
             select.dataset.bound = 'true';
         }
+        // Keep the selection in sync with the HyperDeck tab (shared storage).
+        const savedSel = localStorage.getItem(PLUGIN_SELECTION_STORAGE_KEY) || '';
+        const savedOk = (Array.isArray(plugins) ? plugins : []).some(p => p.name === savedSel);
+        select.value = savedOk ? savedSel : '';
+        wpOnPluginSelectChange();
     } catch (_) {}
+}
+
+// Reflect the current Web Presenter plugin selection into its description, sync
+// button, upload panel and dynamic inputs.
+function wpOnPluginSelectChange() {
+    const select = document.getElementById('wp-plugin-selector');
+    if (!select) return;
+    const desc = document.getElementById('wp-plugin-description');
+    const syncBtn = document.getElementById('wp-btn-plugin-sync');
+    const uploadPanel = document.getElementById('wp-plugin-upload-panel');
+    const plugin = (typeof availablePlugins !== 'undefined' ? availablePlugins : []).find(pl => pl.name === select.value);
+    renderPluginInputs('wp-plugin-inputs', 'wp-plugin', plugin?.inputs || []);
+    if (!select.value) {
+        if (desc) desc.textContent = 'No plugin selected. Manual schedule editing is active.';
+        if (syncBtn) { syncBtn.disabled = false; syncBtn.textContent = 'Fetch & Sync Schedule'; }
+        if (uploadPanel) uploadPanel.classList.add('hidden');
+    } else {
+        if (desc) desc.textContent = plugin?.description || '';
+        if (plugin?.supports_upload) {
+            if (syncBtn) { syncBtn.disabled = true; syncBtn.textContent = 'Use Upload Below'; }
+            if (uploadPanel) uploadPanel.classList.remove('hidden');
+        } else {
+            if (syncBtn) { syncBtn.disabled = false; syncBtn.textContent = 'Fetch & Sync Schedule'; }
+            if (uploadPanel) uploadPanel.classList.add('hidden');
+        }
+    }
+}
+
+// Sync the Active Metadata Schedule dropdown between the HyperDeck and Web
+// Presenter tabs (they share the same plugin source and storage key).
+function applyPluginSelection(name) {
+    const pluginSel = document.getElementById('plugin-selector');
+    const wpSel = document.getElementById('wp-plugin-selector');
+    const setSafe = (el, val) => {
+        if (!el) return;
+        el.value = val;
+        if (el.value !== val) el.value = '';
+    };
+    setSafe(pluginSel, name);
+    setSafe(wpSel, name);
+    currentPluginSelection = name;
+    localStorage.setItem(PLUGIN_SELECTION_STORAGE_KEY, name);
+    updatePluginDetails();
+    wpOnPluginSelectChange();
 }
 
 async function wpTriggerPluginSync() {
