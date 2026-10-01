@@ -1,14 +1,16 @@
 name: Release
 
-# Driven by semantic version labels on a PR (major/minor/patch) or a manual
-# dispatch. Computes the next semver from the latest `v*` tag and creates a
-# GitHub Release. Release notes are auto-generated from the Conventional Commits
-# since the previous tag. Pushing the new tag triggers `build.yml`, which attaches
-# the Docker image and standalone binaries to the release.
+# Driven by semantic version labels on a merged PR (major/minor/patch) or a
+# manual dispatch. Computes the next semver from the latest `v*` tag and creates
+# a GitHub Release. Release notes are generated from the Conventional Commits
+# since the previous tag and grouped by type (Features / Bug Fixes /
+# Dependencies / Other), matching the stockwire-rental release-note style.
+# Pushing the new tag triggers `build.yml`, which attaches the Docker image and
+# standalone binaries to the release.
 
 on:
   pull_request:
-    types: [labeled]
+    types: [closed]
   workflow_dispatch:
     inputs:
       release_type:
@@ -28,9 +30,14 @@ jobs:
   release:
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      contains(github.event.pull_request.labels.*.name, 'major') ||
-      contains(github.event.pull_request.labels.*.name, 'minor') ||
-      contains(github.event.pull_request.labels.*.name, 'patch')
+      (
+        github.event.pull_request.merged == true &&
+        (
+          contains(github.event.pull_request.labels.*.name, 'major') ||
+          contains(github.event.pull_request.labels.*.name, 'minor') ||
+          contains(github.event.pull_request.labels.*.name, 'patch')
+        )
+      )
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -65,14 +72,61 @@ jobs:
           echo "version=v$maj.$min.$pat" >> "$GITHUB_OUTPUT"
           echo "Next version: v$maj.$min.$pat"
 
+      - name: Generate conventional-commits changelog
+        id: changelog
+        run: |
+          RELEASE_SHA=$(git rev-parse HEAD)
+          LATEST=$(git describe --tags --abbrev=0 "${RELEASE_SHA}^" 2>/dev/null || echo "0.0.0")
+          if [ "$LATEST" = "0.0.0" ]; then
+            RANGE="$RELEASE_SHA"
+            COMMITS=$(git log --pretty=format:'%s|||%h' -n 50 "$RELEASE_SHA")
+          else
+            RANGE="${LATEST}..${RELEASE_SHA}"
+            COMMITS=$(git log --pretty=format:'%s|||%h' "$RANGE")
+          fi
+
+          FEATURES=""; FIXES=""; BREAKING=""; OTHER=""; DEPS=""
+          while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            MSG="${line%%|||*}"
+            SHA="${line##*|||}"
+            entry="- ${MSG} (\`${SHA}\`)"
+            if echo "$MSG" | grep -qiE '^feat(\(|:)|^[a-z]+(\(|:).*\bfeat'; then
+              FEATURES+="${entry}"$'\n'
+            elif echo "$MSG" | grep -qiE '^fix(\(|:)|^[a-z]+(\(|:).*\bfix'; then
+              FIXES+="${entry}"$'\n'
+            elif echo "$MSG" | grep -qiE '^breaking|^BREAKING'; then
+              BREAKING+="${entry}"$'\n'
+            elif echo "$MSG" | grep -qiE '^Update |^Bump |^Pin |^(chore|build|fix)\(deps'; then
+              DEPS+="${entry}"$'\n'
+            else
+              OTHER+="${entry}"$'\n'
+            fi
+          done <<< "$COMMITS"
+
+          NOTES_FILE="$(mktemp)"
+          {
+            if [ "${{ steps.type.outputs.type }}" = "major" ]; then
+              echo "## ⚠️ Breaking Changes"
+              echo ""
+            fi
+            [ -n "$BREAKING" ] && printf '%s\n' "$BREAKING"
+            if [ -n "$FEATURES" ]; then echo "## ✨ Features"; echo ""; printf '%s\n' "$FEATURES"; fi
+            if [ -n "$FIXES" ]; then echo "## 🐛 Bug Fixes"; echo ""; printf '%s\n' "$FIXES"; fi
+            if [ -n "$DEPS" ]; then echo "## ⬆️ Dependencies"; echo ""; printf '%s\n' "$DEPS"; fi
+            if [ -n "$OTHER" ]; then echo "## 📦 Other Changes"; echo ""; printf '%s\n' "$OTHER"; fi
+            if [ -z "$BREAKING$FEATURES$FIXES$DEPS$OTHER" ]; then echo "No notable changes"; fi
+          } > "$NOTES_FILE"
+          echo "notes_file=$NOTES_FILE" >> "$GITHUB_OUTPUT"
+
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3
-        with:
-          tag_name: ${{ steps.version.outputs.version }}
-          name: ${{ steps.version.outputs.version }}
-          generate_release_notes: true
-          body: |
-            Automated release cut from Conventional Commits. The changelog below is
-            generated from the commits since the previous tag.
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.version.outputs.version }}"
+          NOTES="${{ steps.changelog.outputs.notes_file }}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --title "$TAG" --notes-file "$NOTES" --target "$(git rev-parse HEAD)"
+          else
+            gh release create "$TAG" --title "$TAG" --notes-file "$NOTES" --target "$(git rev-parse HEAD)"
+          fi

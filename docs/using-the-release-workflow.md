@@ -37,8 +37,10 @@ Run the **Release** workflow manually from the Actions tab and choose a
 
 ### 3. What happens automatically
 
-1. **Release** — `release.yml` computes the next semver, creates the annotated
-   GitHub Release (notes auto-generated from commits), and pushes the `vX.Y.Z` tag.
+1. **Release** — `release.yml` computes the next semver, builds a changelog from
+   the Conventional Commits since the last tag (grouped into Features / Bug Fixes /
+   Dependencies / Other, matching the stockwire-rental style), creates the GitHub
+   Release with those notes, and pushes the `vX.Y.Z` tag.
 2. **Build** — `build.yml` (on the new tag) runs three jobs:
    - **Docker** — Builds a multi-arch image (`linux/amd64` + `linux/arm64`) and pushes it to GitHub Container Registry
    - **macOS** — Builds a standalone binary with PyInstaller and attaches it to the release

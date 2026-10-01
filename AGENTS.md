@@ -69,8 +69,9 @@ Releases are driven by **semantic version labels** on a pull request
   - determines the release type from the highest-priority present label
     (major > minor > patch),
   - computes the next semantic version from the latest `v*` git tag,
-  - creates an annotated GitHub Release (release notes are auto-generated from
-    the Conventional Commits since the last tag).
+  - creates an annotated GitHub Release whose notes are grouped by Conventional
+    Commit type (Features / Bug Fixes / Dependencies / Other), matching the
+    stockwire-rental release-note style.
 - Pushing the resulting tag triggers `.github/workflows/build.yml`, which builds
   the Docker image and the macOS/Windows binaries and attaches them to the
   release.
