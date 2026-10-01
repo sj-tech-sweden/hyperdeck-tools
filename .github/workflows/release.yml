@@ -200,11 +200,17 @@ jobs:
       - name: Build binary
         run: pyinstaller --onefile --name hyperdeck-tools --add-data "app/frontend:app/frontend" --add-data "app/backend/plugins:app/backend/plugins" --add-data "app/backend/model_capability_profiles.json:app/backend" run.py
 
+      - name: Package macOS artifact
+        run: |
+          ARCH="$(uname -m)"
+          cp "dist/hyperdeck-tools" "dist/hyperdeck-tools-macos-${ARCH}"
+          (cd dist && zip -j "hyperdeck-tools-macos-${ARCH}.zip" "hyperdeck-tools-macos-${ARCH}")
+
       - name: Upload to release
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.release.outputs.tag }}
-          files: dist/hyperdeck-tools
+          files: dist/hyperdeck-tools-macos-*.zip
 
   # ── Windows standalone binary ────────────────────────────────────────
   windows:
