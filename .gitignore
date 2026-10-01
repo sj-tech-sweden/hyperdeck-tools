@@ -41,3 +41,4 @@ app/backend/uploads/
 app/backend/schedule.json
 app/backend/config.json
 app/backend/active_event.json
+app/backend/wp_apply_log.jsonl

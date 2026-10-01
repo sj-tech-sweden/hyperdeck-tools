@@ -1,5 +1,60 @@
 # Release Notes
 
+## v0.4.0 — Web Presenter Control
+
+Adds a full Web Presenter control layer: device discovery, stream profiles with
+multi-device role/stage apply, an editable per-device config popup, and a
+plugin-driven schedule system — alongside cross-tab consistency and a hardened
+release process.
+
+### What's New
+
+## Web Presenter Discovery & Connection
+
+- Subnet-wide discovery scans for Blackmagic Web Presenters on port `9977` and reports model + label
+- Resilient supervisor (`run_both.py`) keeps both services alive, frees busy ports on startup, restarts crashed children with backoff, and reloads on `SIGHUP`
+
+## Stream Profiles & Multi-Device Apply
+
+- Define stream profiles (RTMP/SRT) with role-aware primary/secondary keys and URLs, then push them to devices
+- Unified target picker: All / Primary / Backup / Stage / Role+Stage / Specific devices
+- Live-stream guard: devices that are currently streaming are queued and updated automatically when they go idle
+- Optional auto-apply when the active event changes
+
+## Editable Device Config
+
+- Per-device popup to edit stream settings, label, network interfaces (DHCP / Static / DHCP+Static with priority), audio monitor source, and UI locale + audio meter type
+- Reads firmware 4.2 blocks (`STREAM SETTINGS`, `NETWORK INTERFACE`, `AUDIO SETTINGS`, `UI SETTINGS`)
+- Live-stream guard on the popup: warns and requires confirmation before overriding settings on a device that is currently live
+
+## Plugin System
+
+- Generic `PLUGIN_INPUTS` lets plugins declare inputs (e.g. year) rendered as form fields; the Gullbranna scraper now uses the tribe REST API and a pre-filled current-year input
+- Schedule plugin inputs are passed to the scraper by signature, so plugins only receive the parameters they declare
+
+## Cross-Tab Consistency
+
+- The Active Metadata Schedule selection is now synced between the HyperDeck and Web Presenter tabs (both drive the same show)
+
+### Improvements
+
+- Audit log of every device setting change written to `wp_apply_log.jsonl`
+- `start-all` / `stop-all` fall back to configured presenters when the live state cache has not yet populated
+- Added unit tests for target resolution (role+stage AND, explicit hosts, empty hosts) and the live-stream guard
+
+### Bug Fixes
+
+- Fixed the Web Presenter protocol command terminator (commands must end with a blank line)
+- Fixed discovery only scanning the first addresses of the subnet
+- `resolve_wp_targets` no longer matches every device when an explicitly empty `hosts` list is supplied
+
+### Developer Experience
+
+- Added `AGENTS.md` (Conventional Commits + branch naming) and `.opencode/opencode.json`
+- Release process is now label-driven: a `major` / `minor` / `patch` label on a PR (or manual dispatch) cuts the release with auto-generated notes; artifact builds moved to `build.yml`
+
+---
+
 ## v0.3.0 — CI/CD & Test Infrastructure
 
 Adds automated testing, Docker images, and standalone binaries for macOS and Windows.

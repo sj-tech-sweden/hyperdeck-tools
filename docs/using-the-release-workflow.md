@@ -4,7 +4,16 @@ This document explains how to trigger releases, what gets built, and how to use 
 
 ## How It Works
 
-The release workflow (`.github/workflows/release.yml`) runs automatically when you push a version tag. It produces three artifacts:
+Releases are driven by **semantic version labels** on a pull request. The
+two-workflow split is:
+
+- **`release.yml`** — triggered by a `major` / `minor` / `patch` label on a PR
+  (or a manual `workflow_dispatch`). It computes the next version from the latest
+  `v*` tag and creates a GitHub Release. Release notes are auto-generated from the
+  [Conventional Commits](https://www.conventionalcommits.org/) since the previous
+  tag.
+- **`build.yml`** — triggered by the tag that `release.yml` pushes. It builds the
+  three artifacts and attaches them to the release:
 
 | Artifact | Platform | Format |
 | --- | --- | --- |
@@ -12,31 +21,37 @@ The release workflow (`.github/workflows/release.yml`) runs automatically when y
 | Standalone binary | macOS (Apple Silicon) | Single executable file |
 | Standalone binary | Windows (x64) | Single `.exe` file |
 
-All three are attached to a GitHub Release created from the tag.
-
 ## Triggering a Release
 
-### 1. Create and push a tag
+### 1. Label the PR (recommended)
 
-```bash
-git tag v1.0.0
-git push origin v1.0.0
-```
+Add one of `major`, `minor`, or `patch` to the pull request you want to release.
+The highest-priority present label wins (`major` > `minor` > `patch`). The
+Release workflow computes the next version and creates the release; the new tag
+then kicks off `build.yml`.
 
-### 2. What happens automatically
+### 2. Manual dispatch
 
-The workflow runs three jobs in parallel:
+Run the **Release** workflow manually from the Actions tab and choose a
+`release_type` (`major` / `minor` / `patch`).
 
-1. **Docker** — Builds a multi-arch image (`linux/amd64` + `linux/arm64`) and pushes it to GitHub Container Registry
-2. **macOS** — Builds a standalone binary with PyInstaller and attaches it to the release
-3. **Windows** — Builds a standalone `.exe` with PyInstaller and attaches it to the release
+### 3. What happens automatically
 
-A GitHub Release is created at `https://github.com/sj-tech-sweden/hyperdeck-tools/releases/tag/v1.0.0` with all three artifacts.
+1. **Release** — `release.yml` computes the next semver, builds a changelog from
+   the Conventional Commits since the last tag (grouped into Features / Bug Fixes /
+   Dependencies / Other, matching the stockwire-rental style), creates the GitHub
+   Release with those notes, and pushes the `vX.Y.Z` tag.
+2. **Build** — `build.yml` (on the new tag) runs three jobs:
+   - **Docker** — Builds a multi-arch image (`linux/amd64` + `linux/arm64`) and pushes it to GitHub Container Registry
+   - **macOS** — Builds a standalone binary with PyInstaller and attaches it to the release
+   - **Windows** — Builds a standalone `.exe` with PyInstaller and attaches it to the release
 
-### 3. Verify the release
+A GitHub Release is created at `https://github.com/sj-tech-sweden/hyperdeck-tools/releases/tag/vX.Y.Z` with all three artifacts.
+
+### 4. Verify the release
 
 - Go to [Releases](https://github.com/sj-tech-sweden/hyperdeck-tools/releases)
-- Confirm the release appears with three assets
+- Confirm the release appears with three assets and auto-generated notes
 - Check the Docker build in [Packages](https://github.com/sj-tech-sweden/hyperdeck-tools/pkgs/container/hyperdeck-tools)
 
 ## Docker Image
