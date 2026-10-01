@@ -5,6 +5,7 @@ using the smbprotocol library. No manual mounting required.
 """
 
 import os
+import uuid
 
 PLUGIN_LABEL = "SMB / CIFS Share"
 PLUGIN_DESCRIPTION = "Upload files to a Windows file share or Samba server"
@@ -39,10 +40,13 @@ def _get_smb_connection(config: dict):
     if not server or not share:
         raise ValueError("server and share are required")
 
-    conn = Connection(uuid_generate=True, server_name=server, port=port)
+    if domain and username and "\\" not in username and "@" not in username:
+        username = f"{domain}\\{username}"
+
+    conn = Connection(uuid.uuid4(), server_name=server, port=port)
     conn.connect()
 
-    session = Session(conn, username=username, password=password, domain=domain)
+    session = Session(conn, username=username, password=password)
     session.connect()
 
     tree = TreeConnect(session, f"\\\\{server}\\{share}")
@@ -53,7 +57,14 @@ def _get_smb_connection(config: dict):
 
 def _ensure_directory(tree, path_parts: list[str]) -> None:
     """Ensure a directory path exists on the SMB share."""
-    from smbprotocol.open import AccessMask, CreateDisposition, ImpersonationLevel, Open
+    from smbprotocol.open import (
+        CreateDisposition,
+        CreateOptions,
+        FileAttributes,
+        FilePipePrinterAccessMask,
+        ImpersonationLevel,
+        Open,
+    )
 
     current = ""
     for part in path_parts:
@@ -62,11 +73,11 @@ def _ensure_directory(tree, path_parts: list[str]) -> None:
             f = Open(tree, current)
             f.create(
                 ImpersonationLevel.Impersonation,
-                AccessMask.GENERIC_READ,
+                FilePipePrinterAccessMask.GENERIC_READ,
                 None,
                 0,
                 CreateDisposition.FILE_OPEN,
-                0,
+                CreateOptions.FILE_DIRECTORY_FILE,
                 None,
             )
             f.close()
@@ -75,11 +86,11 @@ def _ensure_directory(tree, path_parts: list[str]) -> None:
                 f = Open(tree, current)
                 f.create(
                     ImpersonationLevel.Impersonation,
-                    AccessMask.GENERIC_ALL,
-                    None,
+                    FilePipePrinterAccessMask.GENERIC_ALL,
+                    FileAttributes.FILE_ATTRIBUTE_DIRECTORY,
                     0,
                     CreateDisposition.FILE_CREATE,
-                    0,
+                    CreateOptions.FILE_DIRECTORY_FILE,
                     None,
                 )
                 f.close()
@@ -92,7 +103,7 @@ def send_file(local_path: str, remote_name: str, config: dict) -> bool:
     if not os.path.exists(local_path):
         return False
 
-    from smbprotocol.open import AccessMask, CreateDisposition, ImpersonationLevel, Open
+    from smbprotocol.open import CreateDisposition, FilePipePrinterAccessMask, ImpersonationLevel, Open
 
     conn, session, tree = None, None, None
     try:
@@ -109,7 +120,7 @@ def send_file(local_path: str, remote_name: str, config: dict) -> bool:
             f = Open(tree, remote_path)
             f.create(
                 ImpersonationLevel.Impersonation,
-                AccessMask.GENERIC_WRITE,
+                FilePipePrinterAccessMask.GENERIC_WRITE,
                 None,
                 0,
                 CreateDisposition.FILE_OVERWRITE_IF,
@@ -152,9 +163,14 @@ def send_file(local_path: str, remote_name: str, config: dict) -> bool:
 def test_connection(config: dict) -> dict:
     """Test SMB connectivity by connecting and listing the share."""
     try:
-        from smbprotocol.open import AccessMask, CreateDisposition, ImpersonationLevel, Open
-    except ImportError:
-        return {"ok": False, "message": "smbprotocol is not installed. Install with: pip install smbprotocol"}
+        from smbprotocol.open import (
+            CreateDisposition,
+            FilePipePrinterAccessMask,
+            ImpersonationLevel,
+            Open,
+        )
+    except ImportError as e:
+        return {"ok": False, "message": f"smbprotocol import failed: {e}"}
 
     conn, session, tree = None, None, None
     try:
@@ -163,7 +179,7 @@ def test_connection(config: dict) -> dict:
         f = Open(tree, "")
         f.create(
             ImpersonationLevel.Impersonation,
-            AccessMask.GENERIC_READ,
+            FilePipePrinterAccessMask.GENERIC_READ,
             None,
             0,
             CreateDisposition.FILE_OPEN,
