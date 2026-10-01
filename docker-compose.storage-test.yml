@@ -1,0 +1,132 @@
+# Test harness for the offline storage plugins (S3/Garage, SMB, NFS, Nextcloud).
+#
+# Brings up the hyperdeck-tools app alongside mock/stub backends for every
+# storage plugin that does NOT require a real external account:
+#   - Garage  -> stands in for Amazon S3 / S3-compatible object storage
+#   - Samba   -> stands in for an SMB / CIFS file share
+#   - NFS     -> a real NFS server (the plugin mounts it, so the app runs privileged)
+#   - Nextcloud (SQLite) -> stands in for a WebDAV/Nextcloud server
+#
+# SharePoint and the YouTube Live keys plugin are intentionally NOT included:
+# they require real external accounts and must be tested against the live
+# services.
+#
+# Usage:
+#   docker compose -f docker-compose.storage-test.yml up -d --build
+#   # open http://localhost:8008  (Storage Destinations UI)
+#   docker compose -f docker-compose.storage-test.yml exec app \
+#       python scripts/test_storage_upload.py
+#   docker compose -f docker-compose.storage-test.yml down
+#
+# IMPORTANT: configure the destinations with the *internal* hostnames below
+# (garage, samba, nfs, nextcloud) — NOT localhost — because the backend runs
+# inside the `app` container and resolves those names on the compose network.
+
+services:
+  # The app image is tagged locally so the `minio-init` helper can reuse it
+  # (avoids pulling any extra image for the S3 bucket setup).
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.storage-test
+    image: hyperdeck-tools-app
+    # Mount the repo so config.json / uploads persist on the host and the code
+    # stays live. Overrides the image COPY but keeps the installed nfs-common.
+    volumes:
+      - .:/app
+    ports:
+      - "8008:8008"
+    # Required so the `nfs` plugin can run mount/umount inside the container.
+    privileged: true
+    cap_add:
+      - SYS_ADMIN
+    depends_on:
+      - samba
+      - nfs
+      - nextcloud
+
+  # ── S3 / S3-compatible (Garage) ─────────────────────────────────────────
+  # Garage is a lightweight, self-contained S3-compatible server. Kept in a
+  # profile so the rest of the stack comes up even if this image can't be
+  # pulled. Test the S3 plugin with:
+  #   docker compose -f docker-compose.storage-test.yml --profile s3 up -d
+  #
+  # `garage-init` bootstraps a single-node cluster, creates the `hyperdeck`
+  # bucket, and prints an API key. Read the key with:
+  #   docker compose -f docker-compose.storage-test.yml --profile s3 logs garage-init
+  # then enter it in the S3 destination (endpoint http://garage:3900,
+  # region garage, bucket hyperdeck).
+  #
+  # If the Docker Hub image is unavailable, use the GHCR mirror instead:
+  #   image: ghcr.io/deuxfleurs/garage:v1.0.0
+  garage:
+    image: dxflrs/garage:v1.0.0
+    command: ["garage", "server", "--config", "/garage.toml"]
+    environment:
+      GARAGE_CONFIG: /garage.toml
+    ports:
+      - "3900:3900"   # S3 API
+      - "3902:3902"   # web admin (optional)
+    volumes:
+      - ./deploy/garage.toml:/garage.toml:ro
+      - garage-data:/var/lib/garage
+    profiles: ["s3"]
+
+  garage-init:
+    image: dxflrs/garage:v1.0.0
+    profiles: ["s3"]
+    depends_on:
+      - garage
+    environment:
+      GARAGE_CONFIG: /garage.toml
+    volumes:
+      - ./deploy/garage.toml:/garage.toml:ro
+      - garage-data:/var/lib/garage
+      - ./scripts/init_garage.sh:/init.sh:ro
+    command: ["sh", "/init.sh"]
+
+  # ── SMB / CIFS (Samba) ─────────────────────────────────────────────────
+  # dperson/samba `-s` format: "<name>;<path>[;browsable;readonly;guest;users]".
+  # `-p` sets ownership/permissions on the share (avoids "Access is denied").
+  samba:
+    image: dperson/samba:latest
+    command:
+      - "-u"
+      - "hyperdeck;hyperdeck"
+      - "-s"
+      - "public;/share;yes;no;no;hyperdeck"
+      - "-p"
+    ports:
+      - "139:139"
+      - "445:445"
+    volumes:
+      - samba-data:/share
+
+  # ── NFS ────────────────────────────────────────────────────────────────
+  # The NFS *server* needs privileged access to /proc/fs/nfsd. On a real
+  # Linux host this works; on Docker Desktop (macOS/Windows) the LinuxKit VM
+  # usually lacks the NFS module, so the container fails to start. For that
+  # case, test the NFS plugin from the host instead — see the docs.
+  nfs:
+    image: itsthenetwork/nfs-server-alpine:latest
+    privileged: true
+    environment:
+      SHARED_DIRECTORY: /exports
+    ports:
+      - "2049:2049"
+    volumes:
+      - nfs-data:/exports
+
+  # ── Nextcloud (WebDAV) ─────────────────────────────────────────────────
+  nextcloud:
+    image: nextcloud:apache
+    ports:
+      - "8080:80"
+    volumes:
+      - nc-data:/var/www/html
+
+volumes:
+  garage-data:
+  samba-data:
+  nfs-data:
+  nc-data:
