@@ -61,9 +61,10 @@ services:
   #   image: ghcr.io/deuxfleurs/garage:v1.0.0
   garage:
     image: dxflrs/garage:v1.0.0
-    command: ["garage", "server", "--config", "/garage.toml"]
+    # In v1.0 `--config` is a GLOBAL flag, before the subcommand.
+    command: ["/garage", "--config", "/garage.toml", "server"]
     environment:
-      GARAGE_CONFIG: /garage.toml
+      GARAGE_CONFIG_FILE: /garage.toml
     ports:
       - "3900:3900"   # S3 API
       - "3902:3902"   # web admin (optional)
@@ -72,11 +73,13 @@ services:
       - garage-data:/var/lib/garage
 
   garage-init:
-    image: dxflrs/garage:v1.0.0
+    build:
+      context: .
+      dockerfile: Dockerfile.garage-init
     depends_on:
       - garage
     environment:
-      GARAGE_CONFIG: /garage.toml
+      GARAGE_CONFIG_FILE: /garage.toml
     volumes:
       - ./deploy/garage.toml:/garage.toml:ro
       - garage-data:/var/lib/garage
