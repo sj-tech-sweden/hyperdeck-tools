@@ -70,11 +70,9 @@ services:
     volumes:
       - ./deploy/garage.toml:/garage.toml:ro
       - garage-data:/var/lib/garage
-    profiles: ["s3"]
 
   garage-init:
     image: dxflrs/garage:v1.0.0
-    profiles: ["s3"]
     depends_on:
       - garage
     environment:
