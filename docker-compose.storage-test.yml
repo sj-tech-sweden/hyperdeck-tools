@@ -83,6 +83,7 @@ services:
     volumes:
       - ./deploy/garage.toml:/garage.toml:ro
       - garage-data:/var/lib/garage
+      - garage_creds:/data
       - ./scripts/init_garage.sh:/init.sh:ro
     command: ["sh", "/init.sh"]
 
@@ -128,6 +129,7 @@ services:
 
 volumes:
   garage-data:
+  garage_creds:
   samba-data:
   nfs-data:
   nc-data:

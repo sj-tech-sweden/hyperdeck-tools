@@ -109,6 +109,13 @@ docker compose -f docker-compose.storage-test.yml exec app \
   ```
   Prefix, if set, is honoured.
 
+> **Idempotent re-runs.** `garage-init` persists its key credentials on the
+> `garage_creds` volume and re-allows the bucket by **key id** (never by name),
+> so you can run it as many times as you like — it will not create duplicate
+> keys or leave the bucket unauthorised. Re-running simply re-applies the same
+> permissions. This also means the printed credentials are stable across
+> restarts.
+
 #### SMB / CIFS
 - `test_connection` → `Connected to \\samba\public`
 - After smoke test:
@@ -191,14 +198,24 @@ This plugin simply reads `app/backend/active_stream.json`.
 
 ### YouTube Live (`youtube`) — online only
 
-Requires a real Google Cloud OAuth client and a refresh token:
+Requires a real Google Cloud OAuth client and a refresh token. Full
+step-by-step setup (creating the OAuth client, obtaining a refresh token, and
+config file format) is in **[`docs/youtube-keys-setup.md`](youtube-keys-setup.md)**.
 
-1. Set the credentials (env vars on the app, or `app/backend/youtube_config.json`):
-   `YOUTUBE_CLIENT_ID`, `YOUTUBE_CLIENT_SECRET`, `YOUTUBE_REFRESH_TOKEN`.
-2. Start an **active** YouTube live broadcast in Studio.
-3. Call `fetch_keys()` (async) and confirm it returns a non-empty
+In short:
+
+1. Create a Google Cloud project, enable **YouTube Data API v3**, and make an
+   OAuth 2.0 client ID + secret.
+2. Obtain a `refresh_token` with the `https://www.googleapis.com/auth/youtube`
+   scope (e.g. via the OAuth 2.0 Playground).
+3. Set the credentials — either env vars on the app
+   (`YOUTUBE_CLIENT_ID`, `YOUTUBE_CLIENT_SECRET`, `YOUTUBE_REFRESH_TOKEN`) or a
+   config file at `app/backend/youtube_config.json`
+   (`{ "client_id": …, "client_secret": …, "refresh_token": … }`).
+4. Start an **active** YouTube live broadcast in Studio.
+5. Call `fetch_keys()` (async) and confirm it returns a non-empty
    `primary_url` (ingestion address) and `primary_key` (stream name).
-4. Expect a clear error (not a crash) when credentials are missing or there is
+6. Expect a clear error (not a crash) when credentials are missing or there is
    no active broadcast — that error handling is part of what to verify.
 
 ---

@@ -13,7 +13,9 @@ compose network:
         python scripts/test_storage_upload.py
 
 After a run, verify the file actually landed in the backend:
-    MinIO:     open http://localhost:9001  (bucket "hyperdeck")
+    S3/Garage: docker compose -f docker-compose.storage-test.yml logs garage-init
+               (the printed access/secret keys are what you paste into the S3
+               destination; the bucket is "hyperdeck")
     Samba:     docker compose -f docker-compose.storage-test.yml exec samba ls -la /share
     NFS:       docker run --rm -v hyperdeck-tools_nfs-data:/data busybox ls -la /data
     Nextcloud: browse http://localhost:8080  -> Files -> /HyperDeck

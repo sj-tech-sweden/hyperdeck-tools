@@ -3,7 +3,7 @@
 #   - assign this node to a zone and apply the layout
 #   - ensure the `hyperdeck` bucket exists
 #   - create (once) an API key and allow it read/write on the bucket
-#   - persist the key credentials to /var/lib/garage/creds.json
+#   - persist the key credentials to /data/garage_creds.json (on a volume)
 #
 # Garage only shows a key's secret at creation time, so we persist it to the
 # shared data volume; subsequent runs reuse the saved credentials.
@@ -15,7 +15,7 @@ export GARAGE_CONFIG_FILE
 BUCKET=hyperdeck
 KEYNAME=hyperdeck
 ZONE=dc1
-CREDS=/var/lib/garage/creds.json
+CREDS=/data/garage_creds.json
 RPC_PORT=3901
 
 echo "waiting for garage rpc..."
@@ -45,6 +45,13 @@ fi
 
 # Create the API key once and persist its secret.
 if [ ! -f "$CREDS" ]; then
+  # Idempotent: remove any existing key with this name so we can capture a
+  # fresh secret (Garage only shows the secret at creation time) and avoid
+  # accumulating duplicate keys, which would make the later `bucket allow`
+  # ambiguous ("2 matching keys") and break S3 access.
+  if garage --rpc-host "$RPC_HOST" key info "$KEYNAME" >/dev/null 2>&1; then
+    garage --rpc-host "$RPC_HOST" key delete "$KEYNAME" --yes 2>&1 | head -2 || true
+  fi
   if [ -n "$RPC_HOST" ]; then
     OUT=$(garage --rpc-host "$RPC_HOST" key create "$KEYNAME" 2>&1)
   else
@@ -66,13 +73,19 @@ else
   echo "garage key already created; credentials at $CREDS"
 fi
 
-# Ensure the bucket exists and the key is allowed on it.
+# Recover the key id for the bucket-permission step if creds pre-existed.
+if [ -z "${ACCESS:-}" ] && [ -f "$CREDS" ]; then
+  ACCESS=$(tr -d '{}" ' < "$CREDS" | sed -n 's/.*access_key_id:\([^,]*\).*/\1/p' | head -1)
+fi
+
+# Ensure the bucket exists and the key is allowed on it. We reference the key
+# by its id (not the name) so a name collision can never make this ambiguous.
 if [ -n "$RPC_HOST" ]; then
   garage --rpc-host "$RPC_HOST" bucket create "$BUCKET" 2>&1 | head -3 || true
-  garage --rpc-host "$RPC_HOST" bucket allow "$BUCKET" --read --write --key "$KEYNAME" 2>&1 | head -3 || true
+  garage --rpc-host "$RPC_HOST" bucket allow "$BUCKET" --read --write --key "${ACCESS:-$KEYNAME}" 2>&1 | head -3 || true
 else
   garage bucket create "$BUCKET" 2>&1 | head -3 || true
-  garage bucket allow "$BUCKET" --read --write --key "$KEYNAME" 2>&1 | head -3 || true
+  garage bucket allow "$BUCKET" --read --write --key "${ACCESS:-$KEYNAME}" 2>&1 | head -3 || true
 fi
 
 echo "garage s3 backend ready"
