@@ -973,7 +973,7 @@ async function updateDestinationStatus(dest) {
         dot.title = 'Disabled';
         return;
     }
-    const endpoint = `/api/storage-plugins/${encodeURIComponent(dest.plugin_type)}/test`;
+    const endpoint = `${HD_API_BASE}/api/storage-plugins/${encodeURIComponent(dest.plugin_type)}/test`;
     try {
         const res = await fetch(endpoint, {
             method: 'POST',
@@ -1144,7 +1144,7 @@ async function testStorageConnection() {
     testStatus.className = 'text-[11px] text-slate-400';
 
     try {
-        const res = await fetch(`/api/storage-plugins/${encodeURIComponent(storageType)}/test`, {
+        const res = await fetch(`${HD_API_BASE}/api/storage-plugins/${encodeURIComponent(storageType)}/test`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ config }),
@@ -1231,7 +1231,7 @@ async function editStorageDestination(destId) {
 async function deleteStorageDestination(destId, label) {
     if (!confirm(`Delete storage destination "${label}"?`)) return;
     try {
-        const res = await fetch(`/api/storage-destinations/${encodeURIComponent(destId)}`, { method: 'DELETE' });
+        const res = await fetch(`${HD_API_BASE}/api/storage-destinations/${encodeURIComponent(destId)}`, { method: 'DELETE' });
         if (res.ok) {
             loadStorageDestinations();
             showToast('Storage destination deleted.', 'success');
@@ -1409,7 +1409,7 @@ function insertToken(token) {
 
 // --- Host Filesystem Explorer Controller Logic ---
 async function navigateFolder(targetPath = "") {
-    const url = `/api/browse?path=${encodeURIComponent(targetPath)}`;
+    const url = `${HD_API_BASE}/api/browse?path=${encodeURIComponent(targetPath)}`;
     const list = document.getElementById('modal-folder-list');
     list.innerHTML = '<li class="text-slate-500 text-center p-4 italic">Querying host path...</li>';
     
