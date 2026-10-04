@@ -19,8 +19,10 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.backend.utils import atomic_json_write as _atomic_json_write
+from app.backend.utils import setup_logging
 
 logger = logging.getLogger(__name__)
+setup_logging("hyperdeck")
 
 # Command audit log - ring buffer of last 200 entries
 _command_audit_log: list[dict[str, Any]] = []

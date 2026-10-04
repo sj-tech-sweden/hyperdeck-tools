@@ -20,7 +20,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.backend.discovery import get_active_interface_network
-from app.backend.utils import atomic_json_write
+from app.backend.utils import atomic_json_write, setup_logging
 from app.backend.wp_audit import log_wp_apply
 from app.backend.wp_control import (
     WP_PORT,
@@ -51,6 +51,7 @@ from app.backend.wp_daemon import (
 )
 
 logger = logging.getLogger(__name__)
+setup_logging("webpresenter")
 
 ACTIVE_EVENT_FILE = "app/backend/active_event.json"
 SCHEDULE_FILE = "app/backend/schedule.json"
