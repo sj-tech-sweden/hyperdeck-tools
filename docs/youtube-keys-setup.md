@@ -46,6 +46,28 @@ Those values are then handed to the encoder exactly like the `custom` plugin's
 4. Under **OAuth consent screen**, make sure the app is in
    *Testing* mode (or add your Google account as a test user) so you can
    authorize it without going through full verification.
+5. On the **Credentials** page, open the OAuth client and add an
+   **Authorized redirect URI** pointing back at this app:
+
+   ```
+   http://<host>:<port>/api/wp/plugins/keys/youtube/callback
+   ```
+
+   The `<host>:<port>` must be **exactly** the URL you open the Web Presenter
+   UI in — the backend derives the redirect URI from the incoming request, so
+   `http://localhost:8009/...`, `http://192.168.8.13:8009/...` and
+   `https://stream.example.com/...` are all different and must each be
+   registered if you use more than one.
+
+   > **Google only allows `http://` redirect URIs for `localhost`.** If you open
+   > the UI via a LAN IP (`http://192.168.x.x:8009`), Google will reject the
+   > callback with `redirect_uri_mismatch`. Two easy ways around this:
+   > - **SSH tunnel (simplest):** on your laptop run
+   >   `ssh -L 8009:localhost:8009 user@192.168.8.13`, then open
+   >   `http://localhost:8009` in the browser. Register the
+   >   `http://localhost:8009/.../callback` URI.
+   > - **HTTPS:** put the backend behind a reverse proxy with a valid
+   >   certificate and register the `https://.../callback` URI.
 
 ## Step 2 — Obtain a refresh token
 
@@ -119,6 +141,21 @@ key straight from YouTube instead of from a manually maintained
 | `No active YouTube Live broadcast found.` | No broadcast is currently live. Create and start a livestream, then retry. |
 | `httpx library not installed` | The backend image is missing `httpx`. Rebuild/upgrade the image; `httpx` is a normal dependency of the app. |
 | Got a refresh token once but it stopped working | Refresh tokens can be invalidated if you change the OAuth client, hit the token-count limit, or revoke access. Generate a new one. |
+| `422 (Unprocessable Content)` on `/api/wp/plugins/keys/youtube/authorize` | The handler's `request` argument must be typed as `Request`. If you see this, you are on a build before the fix — update to a version that includes it. It means the OAuth request never reached Google. |
+| `redirect_uri_mismatch` from Google | The callback URL the app sent does not match an **Authorized redirect URI** in the Google Cloud console. Register the exact URL you browse to (see Step 1.5), and remember Google only allows `http://` for `localhost`. |
+
+## Where are the logs?
+
+The backend mirrors its logs to a rotating file so you can inspect OAuth
+problems without a terminal on the host:
+
+- Default location: `/var/log/hyperdeck-tools/webpresenter.log`
+  (the Web Presenter service) and `/var/log/hyperdeck-tools/hyperdeck.log`
+  (the HyperDeck control panel).
+- Override the directory with the `HYPERDECK_LOG_DIR` environment variable, or
+  set `log_dir` in `app/backend/config.json`.
+- If the directory is not writable the backend prints a note to stderr and
+  keeps running — file logging is best-effort and never blocks startup.
 
 ## Notes
 
