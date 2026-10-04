@@ -271,7 +271,7 @@ async function loadSettingsGroupsOptionSuggestions(host) {
     if (settingsGroupsOptionSuggestionsCache[normalizedHost]) return settingsGroupsOptionSuggestionsCache[normalizedHost];
 
     try {
-        const res = await fetch(`/api/control/${encodeURIComponent(normalizedHost)}/configuration`);
+        const res = await fetch(`${HD_API_BASE}/api/control/${encodeURIComponent(normalizedHost)}/configuration`);
         if (!res.ok) throw new Error('fetch failed');
         const data = await res.json();
         const payload = {
@@ -2126,7 +2126,7 @@ function updatePluginDetails() {
 async function sendDeckCommand(host, command) {
     const label = command === 'record' ? '⏺ Recording' : '⏹ Stopped';
     try {
-        const res = await fetch(`/api/control/${encodeURIComponent(host)}/${command}`, { method: 'POST' });
+        const res = await fetch(`${HD_API_BASE}/api/control/${encodeURIComponent(host)}/${command}`, { method: 'POST' });
         let data;
         try { data = await res.json(); } catch (_) { data = {}; }
         if (!res.ok) {
@@ -2153,7 +2153,7 @@ async function sendCommandToAll(command) {
         btn.innerText = command === 'record' ? '⏺ Recording…' : '⏹ Stopping…';
     }
     try {
-        const res = await fetch(`/api/control/all/${command}`, { method: 'POST' });
+        const res = await fetch(`${HD_API_BASE}/api/control/all/${command}`, { method: 'POST' });
         let data;
         try { data = await res.json(); } catch (_) { data = {}; }
         if (!res.ok) {
@@ -2386,14 +2386,14 @@ async function _saveSettingsGroup(name, targets, settings, field_keys) {
 }
 
 async function _applySettingsGroup(name) {
-    const res = await fetch(`/api/control/settings-groups/${encodeURIComponent(name)}/apply`, { method: 'POST' });
+    const res = await fetch(`${HD_API_BASE}/api/control/settings-groups/${encodeURIComponent(name)}/apply`, { method: 'POST' });
     let data;
     try { data = await res.json(); } catch (_) { data = {}; }
     return { ok: res.ok, data };
 }
 
 async function _deleteSettingsGroup(name) {
-    const res = await fetch(`/api/control/settings-groups/${encodeURIComponent(name)}`, { method: 'DELETE' });
+    const res = await fetch(`${HD_API_BASE}/api/control/settings-groups/${encodeURIComponent(name)}`, { method: 'DELETE' });
     let data;
     try { data = await res.json(); } catch (_) { data = {}; }
     return { ok: res.ok, data };
@@ -2948,7 +2948,7 @@ async function loadDeckFormatSlotOptions(host) {
     const previous = slotSelect.value || '1';
     slotSelect.innerHTML = '';
     try {
-        const res = await fetch(`/api/control/${encodeURIComponent(host)}/slots`);
+        const res = await fetch(`${HD_API_BASE}/api/control/${encodeURIComponent(host)}/slots`);
         let data;
         try { data = await res.json(); } catch (_) { data = {}; }
         const slots = Array.isArray(data.slots) && data.slots.length > 0 ? data.slots : ['1'];
@@ -3056,7 +3056,7 @@ async function confirmDeckFormatAction() {
     pendingDeckFormatRequest = null;
 
     try {
-        const res = await fetch(`/api/control/${encodeURIComponent(host)}/format-card`, {
+        const res = await fetch(`${HD_API_BASE}/api/control/${encodeURIComponent(host)}/format-card`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -3146,7 +3146,7 @@ async function loadDeckRecordingsList() {
     statusEl.innerText = '';
 
     try {
-        const res = await fetch(`/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/recordings?slot_id=${encodeURIComponent(slotId)}`);
+        const res = await fetch(`${HD_API_BASE}/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/recordings?slot_id=${encodeURIComponent(slotId)}`);
         let data;
         try { data = await res.json(); } catch (_) { data = {}; }
 
@@ -3252,7 +3252,7 @@ async function transferDeckRecording(remoteFilename) {
 
     let resolvedLocalFilename = remoteFilename;
     try {
-        const previewRes = await fetch(`/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/transfer-preview`, {
+        const previewRes = await fetch(`${HD_API_BASE}/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/transfer-preview`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ slot_id: slotId, remote_filename: remoteFilename }),
@@ -3267,7 +3267,7 @@ async function transferDeckRecording(remoteFilename) {
 
     if (statusEl) statusEl.innerText = `Transferring ${remoteFilename} as ${resolvedLocalFilename}...`;
     try {
-        const res = await fetch(`/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/transfer-recording`, {
+        const res = await fetch(`${HD_API_BASE}/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/transfer-recording`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ slot_id: slotId, remote_filename: remoteFilename, local_filename: resolvedLocalFilename }),
@@ -3331,7 +3331,7 @@ async function loadDeckClipOptions() {
     currentDeckClipMap = [];
 
     try {
-        const res = await fetch(`/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/clips?slot_id=${encodeURIComponent(slotId)}`);
+        const res = await fetch(`${HD_API_BASE}/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/clips?slot_id=${encodeURIComponent(slotId)}`);
         let data;
         try { data = await res.json(); } catch (_) { data = {}; }
 
@@ -3398,7 +3398,7 @@ async function uploadDeckPlaybackFile() {
     try {
         const data = await new Promise((resolve, reject) => {
             const xhr = new XMLHttpRequest();
-            xhr.open('POST', `/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/upload-playback?slot_id=${encodeURIComponent(slotId)}`);
+            xhr.open('POST', `${HD_API_BASE}/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/upload-playback?slot_id=${encodeURIComponent(slotId)}`);
 
             xhr.upload.onprogress = (event) => {
                 if (!event.lengthComputable) return;
@@ -3451,7 +3451,7 @@ async function cueDeckPlayback() {
     }
 
     try {
-        const res = await fetch(`/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/cue`, {
+        const res = await fetch(`${HD_API_BASE}/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/cue`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ clip_id: clipId }),
@@ -3476,7 +3476,7 @@ async function playDeckNow() {
     const clipId = String(clipIdEl?.value || '').trim();
     try {
         const body = clipId ? JSON.stringify({ clip_id: clipId }) : undefined;
-        const res = await fetch(`/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/play`, {
+        const res = await fetch(`${HD_API_BASE}/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/play`, {
             method: 'POST',
             headers: body ? { 'Content-Type': 'application/json' } : undefined,
             body,
@@ -3496,7 +3496,7 @@ async function playDeckNow() {
 
 async function playDeckNowFromCard(host) {
     try {
-        const res = await fetch(`/api/control/${encodeURIComponent(host)}/play`, { method: 'POST' });
+        const res = await fetch(`${HD_API_BASE}/api/control/${encodeURIComponent(host)}/play`, { method: 'POST' });
         let data;
         try { data = await res.json(); } catch (_) { data = {}; }
         if (!res.ok) {
@@ -3524,7 +3524,7 @@ async function scheduleDeckPlayback() {
     const clipId = String(clipEl?.value || '').trim();
 
     try {
-        const res = await fetch(`/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/play-schedule`, {
+        const res = await fetch(`${HD_API_BASE}/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/play-schedule`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ play_at: playAtIso, clip_id: clipId }),
@@ -3546,7 +3546,7 @@ async function cancelDeckPlaybackSchedule() {
     if (!activeDeckRecordingsHost) return;
     const statusEl = document.getElementById('drm-playback-status');
     try {
-        const res = await fetch(`/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/play-schedule`, { method: 'DELETE' });
+        const res = await fetch(`${HD_API_BASE}/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/play-schedule`, { method: 'DELETE' });
         let data;
         try { data = await res.json(); } catch (_) { data = {}; }
         if (!res.ok) {
@@ -3569,7 +3569,7 @@ async function loadDeckSlotOptions() {
     const previous = slotSelect.value || '1';
     slotSelect.innerHTML = '';
     try {
-        const res = await fetch(`/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/slots`);
+        const res = await fetch(`${HD_API_BASE}/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/slots`);
         let data;
         try { data = await res.json(); } catch (_) { data = {}; }
         const slots = Array.isArray(data.slots) && data.slots.length > 0 ? data.slots : ['1'];
@@ -3713,7 +3713,7 @@ async function openDeckSettings(host, name) {
     });
 
     try {
-        const res = await fetch(`/api/control/${encodeURIComponent(host)}/configuration`);
+        const res = await fetch(`${HD_API_BASE}/api/control/${encodeURIComponent(host)}/configuration`);
         let data;
         try { data = await res.json(); } catch (_) { data = {}; }
 
@@ -3809,7 +3809,7 @@ async function loadDeckSettingsDebug() {
     debugEl.innerText = 'Loading diagnostics from device probes...';
 
     try {
-        const res = await fetch(`/api/control/${encodeURIComponent(activeDeckSettingsHost)}/configuration?debug=true`);
+        const res = await fetch(`${HD_API_BASE}/api/control/${encodeURIComponent(activeDeckSettingsHost)}/configuration?debug=true`);
         let data;
         try { data = await res.json(); } catch (_) { data = {}; }
 
@@ -3940,7 +3940,7 @@ async function saveDeckSettings() {
     if (statusEl) statusEl.innerText = '';
 
     try {
-        const res = await fetch(`/api/control/${encodeURIComponent(requestHost)}/configuration`, {
+        const res = await fetch(`${HD_API_BASE}/api/control/${encodeURIComponent(requestHost)}/configuration`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(settings),
@@ -3961,7 +3961,7 @@ async function saveDeckSettings() {
             // Refresh only the current-values panel by re-fetching configuration.
             // This avoids resetting the selects and reopening the whole modal.
             try {
-                const cfgRes = await fetch(`/api/control/${encodeURIComponent(requestHost)}/configuration`);
+                const cfgRes = await fetch(`${HD_API_BASE}/api/control/${encodeURIComponent(requestHost)}/configuration`);
                 if (cfgRes.ok) {
                     const cfgData = await cfgRes.json();
                     if (activeDeckSettingsHost === requestHost) {
