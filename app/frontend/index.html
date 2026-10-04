@@ -600,6 +600,11 @@
                                 </button>
                             </div>
                             <button onclick="showYoutubeSetupGuide()" class="text-[10px] text-slate-500 hover:text-slate-300 transition cursor-pointer">Setup guide for creating OAuth2 credentials</button>
+                            <p class="text-[10px] text-amber-400/80 leading-relaxed">
+                                Google only accepts <code class="font-mono">http://</code> redirect URIs for <strong>localhost</strong>.
+                                If you open this UI over a LAN IP (e.g. <code class="font-mono">http://192.168.x.x:8009</code>) sign-in fails with
+                                <em>redirect_uri_mismatch</em> — use an SSH tunnel to localhost or serve the UI over HTTPS.
+                            </p>
                             <p id="yt-config-status" class="text-[10px] text-slate-500"></p>
                         </div>
                     </div>

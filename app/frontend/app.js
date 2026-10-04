@@ -6163,6 +6163,7 @@ function showYoutubeSetupGuide() {
                 <li>Under <strong>Authorized redirect URIs</strong>, add:
                     <div class="bg-slate-950 border border-slate-800 rounded p-2 mt-1 font-mono text-[11px] text-slate-300" id="yt-redirect-uri">Loading...</div>
                 </li>
+                <li class="text-amber-400/90">⚠ Google only allows <code class="font-mono">http://</code> redirect URIs for <strong>localhost</strong>. If you reach this UI over a LAN IP (e.g. <code class="font-mono">http://192.168.x.x:8009</code>), sign-in fails with <em>redirect_uri_mismatch</em> — use an SSH tunnel to localhost (<code class="font-mono">ssh -L 8009:localhost:8009 user@host</code>) or put the UI behind HTTPS.</li>
                 <li>Click <strong>Create</strong></li>
                 <li>Copy the <strong>Client ID</strong> and <strong>Client Secret</strong></li>
             </ol>
