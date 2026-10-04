@@ -17,6 +17,11 @@ const IS_HD = THIS_PORT === '8008' || THIS_PORT === '';
 const HD_API_BASE = IS_HD ? '' : `${window.location.protocol}//${window.location.hostname}:8008`;
 const WP_API_BASE = IS_WP ? '' : `${window.location.protocol}//${window.location.hostname}:8009`;
 
+function hdApiUrl(path) { return HD_API_BASE + path; }
+function wpApiUrl(path) { return WP_API_BASE + path; }
+function hdFetch(path, opts) { return fetch(hdApiUrl(path), opts); }
+function wpFetch(path, opts) { return fetch(wpApiUrl(path), opts); }
+
 let servicesAvailable = { hyperdeck: IS_HD, webpresenter: IS_WP };
 let activeTab = localStorage.getItem('activeTab') || (IS_WP ? 'webpresenter' : 'hyperdeck');
 
@@ -185,7 +190,7 @@ function toggleEventStreamFields(buttonEl) {
 }
 
 function loadWpProfilesIntoSelect(select, currentValue) {
-    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/profiles` : '/api/wp/profiles';
+    const url = wpApiUrl(`/api/wp/profiles`);
     fetch(url).then(r => r.json()).then(profiles => {
         select.innerHTML = '<option value="">None</option>';
         (Array.isArray(profiles) ? profiles : []).forEach(p => {
@@ -271,7 +276,7 @@ async function loadSettingsGroupsOptionSuggestions(host) {
     if (settingsGroupsOptionSuggestionsCache[normalizedHost]) return settingsGroupsOptionSuggestionsCache[normalizedHost];
 
     try {
-        const res = await fetch(`${HD_API_BASE}/api/control/${encodeURIComponent(normalizedHost)}/configuration`);
+        const res = await hdFetch(`/api/control/${encodeURIComponent(normalizedHost)}/configuration`);
         if (!res.ok) throw new Error('fetch failed');
         const data = await res.json();
         const payload = {
@@ -707,14 +712,14 @@ function updateStageModeUI() {
 
 async function updateDashboardMetrics() {
     try {
-        const res = await fetch(HD_API_BASE + '/api/state');
+        const res = await hdFetch('/api/state');
         if (!res.ok) return;
         const state = await res.json();
         const container = document.getElementById('decks-container');
 
         // Keep the staging HUD aligned with backend auto-selected active context.
         try {
-            const activeContextRes = await fetch(HD_API_BASE + '/api/schedule/active');
+            const activeContextRes = await hdFetch('/api/schedule/active');
             if (activeContextRes.ok) {
                 const activeContext = await activeContextRes.json();
                 const nextId = (activeContext?.id || 'default').toString();
@@ -839,7 +844,7 @@ async function updateDashboardMetrics() {
 
 async function pullConfigurationMatrix() {
     try {
-        const res = await fetch(HD_API_BASE + '/api/config');
+        const res = await hdFetch('/api/config');
         if (!res.ok) return;
         localConfigCache = ensureConfigShape(await res.json());
         
@@ -912,8 +917,8 @@ async function loadStorageDestinations() {
 
     try {
         const [pluginsRes, destsRes] = await Promise.all([
-            fetch(HD_API_BASE + '/api/storage-plugins'),
-            fetch(HD_API_BASE + '/api/storage-destinations'),
+            hdFetch('/api/storage-plugins'),
+            hdFetch('/api/storage-destinations'),
         ]);
         const plugins = await pluginsRes.json();
         const destsData = await destsRes.json();
@@ -973,7 +978,7 @@ async function updateDestinationStatus(dest) {
         dot.title = 'Disabled';
         return;
     }
-    const endpoint = `${HD_API_BASE}/api/storage-plugins/${encodeURIComponent(dest.plugin_type)}/test`;
+    const endpoint = hdApiUrl(`/api/storage-plugins/${encodeURIComponent(dest.plugin_type)}/test`);
     try {
         const res = await fetch(endpoint, {
             method: 'POST',
@@ -1144,7 +1149,7 @@ async function testStorageConnection() {
     testStatus.className = 'text-[11px] text-slate-400';
 
     try {
-        const res = await fetch(`${HD_API_BASE}/api/storage-plugins/${encodeURIComponent(storageType)}/test`, {
+        const res = await hdFetch(`/api/storage-plugins/${encodeURIComponent(storageType)}/test`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ config }),
@@ -1192,7 +1197,7 @@ async function saveStorageDestination() {
     }
 
     try {
-        const res = await fetch(HD_API_BASE + '/api/storage-destinations', {
+        const res = await hdFetch('/api/storage-destinations', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -1219,7 +1224,7 @@ async function saveStorageDestination() {
 
 async function editStorageDestination(destId) {
     try {
-        const res = await fetch(HD_API_BASE + '/api/storage-destinations');
+        const res = await hdFetch('/api/storage-destinations');
         const data = await res.json();
         const dest = (data.storage_destinations || []).find(d => d.id === destId);
         if (dest) openStorageDestModal(dest);
@@ -1231,7 +1236,7 @@ async function editStorageDestination(destId) {
 async function deleteStorageDestination(destId, label) {
     if (!confirm(`Delete storage destination "${label}"?`)) return;
     try {
-        const res = await fetch(`${HD_API_BASE}/api/storage-destinations/${encodeURIComponent(destId)}`, { method: 'DELETE' });
+        const res = await hdFetch(`/api/storage-destinations/${encodeURIComponent(destId)}`, { method: 'DELETE' });
         if (res.ok) {
             loadStorageDestinations();
             showToast('Storage destination deleted.', 'success');
@@ -1328,7 +1333,7 @@ async function saveConfigToServer() {
         },
     };
     try {
-        const res = await fetch(HD_API_BASE + '/api/config', {
+        const res = await hdFetch('/api/config', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify(payload)
@@ -1358,7 +1363,7 @@ async function triggerDiscovery() {
     list.innerHTML = '<li class="text-sm p-4 text-slate-500 italic text-center animate-pulse">Scanning local subnet structure for active HyperDeck control slots...</li>';
     
     try {
-        const res = await fetch(HD_API_BASE + '/api/discover');
+        const res = await hdFetch('/api/discover');
         const data = await res.json();
         document.getElementById('discovery-subnet').innerText = `Scan Profile Target Base Range: ${data.subnet_scanned}`;
 
@@ -1409,7 +1414,7 @@ function insertToken(token) {
 
 // --- Host Filesystem Explorer Controller Logic ---
 async function navigateFolder(targetPath = "") {
-    const url = `${HD_API_BASE}/api/browse?path=${encodeURIComponent(targetPath)}`;
+    const url = hdApiUrl(`/api/browse?path=${encodeURIComponent(targetPath)}`);
     const list = document.getElementById('modal-folder-list');
     list.innerHTML = '<li class="text-slate-500 text-center p-4 italic">Querying host path...</li>';
     
@@ -1465,7 +1470,7 @@ function renderQuickAccessSidebar() {
     const list = document.getElementById('modal-quick-access');
     if (!list) return;
     list.innerHTML = '<li class="text-slate-500 text-[10px] px-2 py-1">Loading...</li>';
-    fetch(HD_API_BASE + '/api/browse/roots').then(r => r.json()).then(data => {
+    hdFetch('/api/browse/roots').then(r => r.json()).then(data => {
         list.innerHTML = '';
         const roots = data.roots || [];
         roots.forEach(root => {
@@ -1513,7 +1518,7 @@ function updateLiveStagingHUD(id, title) {
 
 async function selectActiveEventContext(id, plannedTitle) {
     try {
-        const response = await fetch(HD_API_BASE + '/api/schedule/active', {
+        const response = await hdFetch('/api/schedule/active', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({ id: id, planned_title: plannedTitle })
@@ -1819,7 +1824,7 @@ async function saveScheduleFromMatrix() {
     scheduleDataCache = normalizedRows;
     const payload = normalizedRows.map(({ id, planned_title, start_time, stage, slate_metadata }) => ({ id, planned_title, start_time, stage, slate_metadata }));
 
-    await fetch(HD_API_BASE + '/api/schedule', {
+    await hdFetch('/api/schedule', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -1863,7 +1868,7 @@ function requestWpScheduleSaveDebounced() {
         wpScheduleSaveDebounceTimer = null;
         try {
             mergeVisibleRowsIntoCache();
-            const url = HD_API_BASE ? `${HD_API_BASE}/api/schedule` : '/api/schedule';
+            const url = hdApiUrl(`/api/schedule`);
             await fetch(url, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
@@ -1978,7 +1983,7 @@ async function triggerPluginSync() {
         syncButton.innerText = 'Syncing...';
         syncStatus.innerText = `Running plugin: ${plugin}`;
 
-        const runUrl = HD_API_BASE ? `${HD_API_BASE}/api/plugins/run/${encodeURIComponent(plugin)}` : `/api/plugins/run/${encodeURIComponent(plugin)}`;
+        const runUrl = hdApiUrl(`/api/plugins/run/${encodeURIComponent(plugin)}`);
         const selectedPlugin = availablePlugins.find(p => p.name === plugin);
         const payload = readPluginInputs('plugin', selectedPlugin?.inputs || []);
         const res = await fetch(runUrl, {
@@ -2001,7 +2006,7 @@ async function triggerPluginSync() {
             return;
         }
 
-        const scheduleRes = await fetch(HD_API_BASE + '/api/schedule');
+        const scheduleRes = await hdFetch('/api/schedule');
         const schedule = await scheduleRes.json();
         renderScheduleMatrix(schedule);
 
@@ -2043,7 +2048,7 @@ async function uploadScheduleFile() {
         uploadButton.innerText = 'Uploading...';
         uploadStatus.innerText = `Uploading ${file.name}...`;
 
-        const uploadUrl = HD_API_BASE ? `${HD_API_BASE}/api/plugins/upload/${encodeURIComponent(plugin)}` : `/api/plugins/upload/${encodeURIComponent(plugin)}`;
+        const uploadUrl = hdApiUrl(`/api/plugins/upload/${encodeURIComponent(plugin)}`);
         const res = await fetch(uploadUrl, {
             method: 'POST',
             body: formData,
@@ -2055,7 +2060,7 @@ async function uploadScheduleFile() {
             return;
         }
 
-        const scheduleRes = await fetch(HD_API_BASE + '/api/schedule');
+        const scheduleRes = await hdFetch('/api/schedule');
         const schedule = await scheduleRes.json();
         renderScheduleMatrix(schedule);
         uploadStatus.innerText = `Upload complete. ${Array.isArray(schedule) ? schedule.length : 0} rows loaded.`;
@@ -2069,7 +2074,7 @@ async function uploadScheduleFile() {
 
 async function clearScheduleForManualMode() {
     scheduleDataCache = [];
-    await fetch(HD_API_BASE + '/api/schedule', {
+    await hdFetch('/api/schedule', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify([])
@@ -2126,7 +2131,7 @@ function updatePluginDetails() {
 async function sendDeckCommand(host, command) {
     const label = command === 'record' ? '⏺ Recording' : '⏹ Stopped';
     try {
-        const res = await fetch(`${HD_API_BASE}/api/control/${encodeURIComponent(host)}/${command}`, { method: 'POST' });
+        const res = await hdFetch(`/api/control/${encodeURIComponent(host)}/${command}`, { method: 'POST' });
         let data;
         try { data = await res.json(); } catch (_) { data = {}; }
         if (!res.ok) {
@@ -2153,7 +2158,7 @@ async function sendCommandToAll(command) {
         btn.innerText = command === 'record' ? '⏺ Recording…' : '⏹ Stopping…';
     }
     try {
-        const res = await fetch(`${HD_API_BASE}/api/control/all/${command}`, { method: 'POST' });
+        const res = await hdFetch(`/api/control/all/${command}`, { method: 'POST' });
         let data;
         try { data = await res.json(); } catch (_) { data = {}; }
         if (!res.ok) {
@@ -2368,14 +2373,14 @@ function filterDeckSettingsByScope(settings) {
 
 // --- Shared Settings Groups API helpers ---
 async function _fetchSettingsGroups() {
-    const res = await fetch(HD_API_BASE + '/api/control/settings-groups');
+    const res = await hdFetch('/api/control/settings-groups');
     if (!res.ok) return {};
     const data = await res.json();
     return (data && typeof data.groups === 'object' && data.groups) ? data.groups : {};
 }
 
 async function _saveSettingsGroup(name, targets, settings, field_keys) {
-    const res = await fetch(HD_API_BASE + '/api/control/settings-groups', {
+    const res = await hdFetch('/api/control/settings-groups', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, targets, settings, field_keys }),
@@ -2386,14 +2391,14 @@ async function _saveSettingsGroup(name, targets, settings, field_keys) {
 }
 
 async function _applySettingsGroup(name) {
-    const res = await fetch(`${HD_API_BASE}/api/control/settings-groups/${encodeURIComponent(name)}/apply`, { method: 'POST' });
+    const res = await hdFetch(`/api/control/settings-groups/${encodeURIComponent(name)}/apply`, { method: 'POST' });
     let data;
     try { data = await res.json(); } catch (_) { data = {}; }
     return { ok: res.ok, data };
 }
 
 async function _deleteSettingsGroup(name) {
-    const res = await fetch(`${HD_API_BASE}/api/control/settings-groups/${encodeURIComponent(name)}`, { method: 'DELETE' });
+    const res = await hdFetch(`/api/control/settings-groups/${encodeURIComponent(name)}`, { method: 'DELETE' });
     let data;
     try { data = await res.json(); } catch (_) { data = {}; }
     return { ok: res.ok, data };
@@ -2451,7 +2456,7 @@ async function applyDeckSettingsToSelectedTargets() {
 
     if (statusEl) statusEl.innerText = `Applying ${Object.keys(settings).length} setting(s) to ${targets.length} deck(s)...`;
     try {
-        const res = await fetch(HD_API_BASE + '/api/control/apply-settings', {
+        const res = await hdFetch('/api/control/apply-settings', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ targets, settings }),
@@ -2917,7 +2922,7 @@ async function applySettingsGroupsDraftToSelected() {
     }
 
     try {
-        const res = await fetch(HD_API_BASE + '/api/control/apply-settings', {
+        const res = await hdFetch('/api/control/apply-settings', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ targets, settings: scopedSettings }),
@@ -2948,7 +2953,7 @@ async function loadDeckFormatSlotOptions(host) {
     const previous = slotSelect.value || '1';
     slotSelect.innerHTML = '';
     try {
-        const res = await fetch(`${HD_API_BASE}/api/control/${encodeURIComponent(host)}/slots`);
+        const res = await hdFetch(`/api/control/${encodeURIComponent(host)}/slots`);
         let data;
         try { data = await res.json(); } catch (_) { data = {}; }
         const slots = Array.isArray(data.slots) && data.slots.length > 0 ? data.slots : ['1'];
@@ -3056,7 +3061,7 @@ async function confirmDeckFormatAction() {
     pendingDeckFormatRequest = null;
 
     try {
-        const res = await fetch(`${HD_API_BASE}/api/control/${encodeURIComponent(host)}/format-card`, {
+        const res = await hdFetch(`/api/control/${encodeURIComponent(host)}/format-card`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -3146,7 +3151,7 @@ async function loadDeckRecordingsList() {
     statusEl.innerText = '';
 
     try {
-        const res = await fetch(`${HD_API_BASE}/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/recordings?slot_id=${encodeURIComponent(slotId)}`);
+        const res = await hdFetch(`/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/recordings?slot_id=${encodeURIComponent(slotId)}`);
         let data;
         try { data = await res.json(); } catch (_) { data = {}; }
 
@@ -3252,7 +3257,7 @@ async function transferDeckRecording(remoteFilename) {
 
     let resolvedLocalFilename = remoteFilename;
     try {
-        const previewRes = await fetch(`${HD_API_BASE}/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/transfer-preview`, {
+        const previewRes = await hdFetch(`/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/transfer-preview`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ slot_id: slotId, remote_filename: remoteFilename }),
@@ -3267,7 +3272,7 @@ async function transferDeckRecording(remoteFilename) {
 
     if (statusEl) statusEl.innerText = `Transferring ${remoteFilename} as ${resolvedLocalFilename}...`;
     try {
-        const res = await fetch(`${HD_API_BASE}/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/transfer-recording`, {
+        const res = await hdFetch(`/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/transfer-recording`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ slot_id: slotId, remote_filename: remoteFilename, local_filename: resolvedLocalFilename }),
@@ -3331,7 +3336,7 @@ async function loadDeckClipOptions() {
     currentDeckClipMap = [];
 
     try {
-        const res = await fetch(`${HD_API_BASE}/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/clips?slot_id=${encodeURIComponent(slotId)}`);
+        const res = await hdFetch(`/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/clips?slot_id=${encodeURIComponent(slotId)}`);
         let data;
         try { data = await res.json(); } catch (_) { data = {}; }
 
@@ -3398,7 +3403,7 @@ async function uploadDeckPlaybackFile() {
     try {
         const data = await new Promise((resolve, reject) => {
             const xhr = new XMLHttpRequest();
-            xhr.open('POST', `${HD_API_BASE}/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/upload-playback?slot_id=${encodeURIComponent(slotId)}`);
+            xhr.open('POST', hdApiUrl(`/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/upload-playback?slot_id=${encodeURIComponent(slotId)}`));
 
             xhr.upload.onprogress = (event) => {
                 if (!event.lengthComputable) return;
@@ -3451,7 +3456,7 @@ async function cueDeckPlayback() {
     }
 
     try {
-        const res = await fetch(`${HD_API_BASE}/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/cue`, {
+        const res = await hdFetch(`/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/cue`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ clip_id: clipId }),
@@ -3476,7 +3481,7 @@ async function playDeckNow() {
     const clipId = String(clipIdEl?.value || '').trim();
     try {
         const body = clipId ? JSON.stringify({ clip_id: clipId }) : undefined;
-        const res = await fetch(`${HD_API_BASE}/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/play`, {
+        const res = await hdFetch(`/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/play`, {
             method: 'POST',
             headers: body ? { 'Content-Type': 'application/json' } : undefined,
             body,
@@ -3496,7 +3501,7 @@ async function playDeckNow() {
 
 async function playDeckNowFromCard(host) {
     try {
-        const res = await fetch(`${HD_API_BASE}/api/control/${encodeURIComponent(host)}/play`, { method: 'POST' });
+        const res = await hdFetch(`/api/control/${encodeURIComponent(host)}/play`, { method: 'POST' });
         let data;
         try { data = await res.json(); } catch (_) { data = {}; }
         if (!res.ok) {
@@ -3524,7 +3529,7 @@ async function scheduleDeckPlayback() {
     const clipId = String(clipEl?.value || '').trim();
 
     try {
-        const res = await fetch(`${HD_API_BASE}/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/play-schedule`, {
+        const res = await hdFetch(`/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/play-schedule`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ play_at: playAtIso, clip_id: clipId }),
@@ -3546,7 +3551,7 @@ async function cancelDeckPlaybackSchedule() {
     if (!activeDeckRecordingsHost) return;
     const statusEl = document.getElementById('drm-playback-status');
     try {
-        const res = await fetch(`${HD_API_BASE}/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/play-schedule`, { method: 'DELETE' });
+        const res = await hdFetch(`/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/play-schedule`, { method: 'DELETE' });
         let data;
         try { data = await res.json(); } catch (_) { data = {}; }
         if (!res.ok) {
@@ -3569,7 +3574,7 @@ async function loadDeckSlotOptions() {
     const previous = slotSelect.value || '1';
     slotSelect.innerHTML = '';
     try {
-        const res = await fetch(`${HD_API_BASE}/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/slots`);
+        const res = await hdFetch(`/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/slots`);
         let data;
         try { data = await res.json(); } catch (_) { data = {}; }
         const slots = Array.isArray(data.slots) && data.slots.length > 0 ? data.slots : ['1'];
@@ -3713,7 +3718,7 @@ async function openDeckSettings(host, name) {
     });
 
     try {
-        const res = await fetch(`${HD_API_BASE}/api/control/${encodeURIComponent(host)}/configuration`);
+        const res = await hdFetch(`/api/control/${encodeURIComponent(host)}/configuration`);
         let data;
         try { data = await res.json(); } catch (_) { data = {}; }
 
@@ -3809,7 +3814,7 @@ async function loadDeckSettingsDebug() {
     debugEl.innerText = 'Loading diagnostics from device probes...';
 
     try {
-        const res = await fetch(`${HD_API_BASE}/api/control/${encodeURIComponent(activeDeckSettingsHost)}/configuration?debug=true`);
+        const res = await hdFetch(`/api/control/${encodeURIComponent(activeDeckSettingsHost)}/configuration?debug=true`);
         let data;
         try { data = await res.json(); } catch (_) { data = {}; }
 
@@ -3940,7 +3945,7 @@ async function saveDeckSettings() {
     if (statusEl) statusEl.innerText = '';
 
     try {
-        const res = await fetch(`${HD_API_BASE}/api/control/${encodeURIComponent(requestHost)}/configuration`, {
+        const res = await hdFetch(`/api/control/${encodeURIComponent(requestHost)}/configuration`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(settings),
@@ -3961,7 +3966,7 @@ async function saveDeckSettings() {
             // Refresh only the current-values panel by re-fetching configuration.
             // This avoids resetting the selects and reopening the whole modal.
             try {
-                const cfgRes = await fetch(`${HD_API_BASE}/api/control/${encodeURIComponent(requestHost)}/configuration`);
+                const cfgRes = await hdFetch(`/api/control/${encodeURIComponent(requestHost)}/configuration`);
                 if (cfgRes.ok) {
                     const cfgData = await cfgRes.json();
                     if (activeDeckSettingsHost === requestHost) {
@@ -4133,7 +4138,7 @@ Object.assign(window, {
 // Update your primary load sequence to populate the HUD card on application bootup
 async function loadPluginManagerSystem() {
     try {
-        const pluginRes = await fetch(HD_API_BASE + '/api/plugins');
+        const pluginRes = await hdFetch('/api/plugins');
         const plugins = await pluginRes.json();
         availablePlugins = Array.isArray(plugins) ? plugins : [];
         const selector = document.getElementById('plugin-selector');
@@ -4230,12 +4235,12 @@ async function loadPluginManagerSystem() {
         }
 
         // Pull active server token state and force updates to HUD card
-        const activeContextRes = await fetch(HD_API_BASE + '/api/schedule/active');
+        const activeContextRes = await hdFetch('/api/schedule/active');
         const activeContext = await activeContextRes.json();
         globallyActiveEventId = activeContext.id;
         updateLiveStagingHUD(activeContext.id, activeContext.planned_title);
 
-        const dataRes = await fetch(HD_API_BASE + '/api/schedule');
+        const dataRes = await hdFetch('/api/schedule');
         const schedule = await dataRes.json();
         renderScheduleMatrix(schedule);
     } catch(e) { console.error("Could not synchronize core schedule interface modules: ", e); }
@@ -4397,7 +4402,7 @@ function switchAppTab(tab) {
 function startWpSse() {
     if (wpSseSource) return;
     if (wpPollInterval) { clearInterval(wpPollInterval); wpPollInterval = null; }
-    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/events` : '/api/wp/events';
+    const url = wpApiUrl(`/api/wp/events`);
     try {
         wpSseSource = new EventSource(url);
         wpSseSource.onmessage = (event) => {
@@ -4426,7 +4431,7 @@ function stopWpSse() {
 
 async function loadWpState() {
     try {
-        const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/state` : '/api/wp/state';
+        const url = wpApiUrl(`/api/wp/state`);
         const res = await fetch(url);
         wpStateCache = await res.json();
         renderWpPresenterCards();
@@ -4437,7 +4442,7 @@ async function loadWpState() {
 // --- WP Presenter Management ---
 async function loadWpPresenters() {
     try {
-        const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/presenters` : '/api/wp/presenters';
+        const url = wpApiUrl(`/api/wp/presenters`);
         const res = await fetch(url);
         const data = await res.json();
         wpPresentersConfig = {};
@@ -4557,7 +4562,7 @@ function updateWpGlobalStatus() {
 
 // --- WP Stream Control ---
 async function wpStreamStart(host) {
-    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/stream/start` : '/api/wp/stream/start';
+    const url = wpApiUrl(`/api/wp/stream/start`);
     try {
         await fetch(url, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({hosts: [host]}) });
         setTimeout(loadWpState, 500);
@@ -4565,7 +4570,7 @@ async function wpStreamStart(host) {
 }
 
 async function wpStreamStop(host) {
-    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/stream/stop` : '/api/wp/stream/stop';
+    const url = wpApiUrl(`/api/wp/stream/stop`);
     try {
         await fetch(url, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({hosts: [host]}) });
         setTimeout(loadWpState, 500);
@@ -4574,7 +4579,7 @@ async function wpStreamStop(host) {
 
 async function wpStartAll() {
     if (!confirm('Start streaming on ALL Web Presenters?')) return;
-    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/stream/start-all` : '/api/wp/stream/start-all';
+    const url = wpApiUrl(`/api/wp/stream/start-all`);
     try {
         await fetch(url, { method: 'POST' });
         setTimeout(loadWpState, 500);
@@ -4583,7 +4588,7 @@ async function wpStartAll() {
 
 async function wpStopAll() {
     if (!confirm('Stop streaming on ALL Web Presenters?')) return;
-    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/stream/stop-all` : '/api/wp/stream/stop-all';
+    const url = wpApiUrl(`/api/wp/stream/stop-all`);
     try {
         await fetch(url, { method: 'POST' });
         setTimeout(loadWpState, 500);
@@ -4646,7 +4651,7 @@ async function saveWpPresenter() {
     if (!name) { showToast('Enter a device name', 'warning'); return; }
     if (!host) { showToast('Enter an IP address', 'warning'); return; }
 
-    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/presenters` : '/api/wp/presenters';
+    const url = wpApiUrl(`/api/wp/presenters`);
     try {
         await fetch(url, {
             method: 'POST',
@@ -4661,7 +4666,7 @@ async function saveWpPresenter() {
 
 async function wpRemovePresenter(name) {
     if (!confirm(`Remove presenter "${name}"?`)) return;
-    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/presenters/${encodeURIComponent(name)}` : `/api/wp/presenters/${encodeURIComponent(name)}`;
+    const url = wpApiUrl(`/api/wp/presenters/${encodeURIComponent(name)}`);
     try {
         await fetch(url, { method: 'DELETE' });
         loadWpPresenters();
@@ -4671,7 +4676,7 @@ async function wpRemovePresenter(name) {
 
 async function wpDiscover() {
     showToast('Scanning network for Web Presenters...', 'info');
-    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/discover` : '/api/wp/discover';
+    const url = wpApiUrl(`/api/wp/discover`);
     try {
         const res = await fetch(url);
         const data = await res.json();
@@ -4684,7 +4689,7 @@ async function wpDiscover() {
             found.forEach(d => {
                 const name = d.label || d.model || d.ip;
                 if (!wpPresentersConfig[name]) {
-                    const saveUrl = WP_API_BASE ? `${WP_API_BASE}/api/wp/presenters` : '/api/wp/presenters';
+                    const saveUrl = wpApiUrl(`/api/wp/presenters`);
                     fetch(saveUrl, {
                         method: 'POST',
                         headers: {'Content-Type': 'application/json'},
@@ -4717,7 +4722,7 @@ async function wpOpenSettings(host) {
     content.innerHTML = '<div class="text-slate-500">Loading settings...</div>';
     modal.classList.remove('hidden');
 
-    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/${host}/settings` : `/api/wp/${host}/settings`;
+    const url = wpApiUrl(`/api/wp/${host}/settings`);
     try {
         const res = await fetch(url);
         if (!res.ok) {
@@ -4842,7 +4847,7 @@ async function wpSaveDeviceSettings(host) {
         }
         cleaned.force = true;
     }
-    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/${host}/settings` : `/api/wp/${host}/settings`;
+    const url = wpApiUrl(`/api/wp/${host}/settings`);
     if (resultEl) resultEl.textContent = 'Saving...';
     try {
         const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cleaned) });
@@ -4863,7 +4868,7 @@ async function wpSaveDeviceSettings(host) {
 }
 
 async function wpPostDeviceSection(host, section, payload) {
-    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/${host}/${section}` : `/api/wp/${host}/${section}`;
+    const url = wpApiUrl(`/api/wp/${host}/${section}`);
     const resultEl = document.getElementById('wpds-result');
     if (resultEl) resultEl.textContent = 'Saving...';
     try {
@@ -4974,7 +4979,7 @@ function wpOnProfileSelected() {
     }
 
     // Load profile and fill form
-    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/profiles` : '/api/wp/profiles';
+    const url = wpApiUrl(`/api/wp/profiles`);
     fetch(url).then(r => r.json()).then(profiles => {
         const profile = profiles.find(p => p.name === profileName);
         if (!profile || !profile.settings) return;
@@ -5043,7 +5048,7 @@ function wpOnProtocolChanged() {
 }
 
 async function wpLoadActiveToForm() {
-    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/active` : '/api/wp/active';
+    const url = wpApiUrl(`/api/wp/active`);
     try {
         const res = await fetch(url);
         const data = await res.json();
@@ -5112,7 +5117,7 @@ function wpCollectStreamConfig() {
 
 async function wpSaveStreamConfig() {
     const config = wpCollectStreamConfig();
-    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/active` : '/api/wp/active';
+    const url = wpApiUrl(`/api/wp/active`);
     try {
         await fetch(url, {
             method: 'POST',
@@ -5168,7 +5173,7 @@ function setTextIfExists(id, text) {
 
 // --- Stream Profiles ---
 async function loadWpProfiles() {
-    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/profiles` : '/api/wp/profiles';
+    const url = wpApiUrl(`/api/wp/profiles`);
     try {
         const res = await fetch(url);
         const profiles = await res.json();
@@ -5221,7 +5226,7 @@ async function wpSaveAsProfile(updateName) {
     const name = updateName || prompt('Profile name:');
     if (!name) return;
     const config = wpCollectStreamConfig();
-    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/profiles` : '/api/wp/profiles';
+    const url = wpApiUrl(`/api/wp/profiles`);
     try {
         await fetch(url, {
             method: 'POST',
@@ -5235,7 +5240,7 @@ async function wpSaveAsProfile(updateName) {
 }
 
 function wpEditProfile(name) {
-    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/profiles` : '/api/wp/profiles';
+    const url = wpApiUrl(`/api/wp/profiles`);
     fetch(url).then(r => r.json()).then(profiles => {
         const profile = profiles.find(p => p.name === name);
         if (!profile || !profile.settings) { showToast('Profile not found', 'error'); return; }
@@ -5277,7 +5282,7 @@ function wpEditCurrentProfile() {
 // Form-fill a saved profile into the editable stream config (used when an
 // event's stream_profile is selected — not a device push).
 async function wpApplyProfile(name) {
-    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/profiles` : '/api/wp/profiles';
+    const url = wpApiUrl(`/api/wp/profiles`);
     try {
         const res = await fetch(url);
         const profiles = await res.json();
@@ -5361,7 +5366,7 @@ async function wpApplyProfileWithTarget() {
 
     if (scope !== 'device' && !confirm(`Apply profile "${wpApProfileName}" to all matching devices?`)) return;
 
-    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/profiles/apply` : '/api/wp/profiles/apply';
+    const url = wpApiUrl(`/api/wp/profiles/apply`);
     const resultEl = document.getElementById('wp-ap-result');
     try {
         const res = await fetch(url, {
@@ -5394,7 +5399,7 @@ function wpCloseApModal() {
 
 async function wpDeleteProfile(name) {
     if (!confirm(`Delete profile "${name}"?`)) return;
-    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/profiles/${encodeURIComponent(name)}` : `/api/wp/profiles/${encodeURIComponent(name)}`;
+    const url = wpApiUrl(`/api/wp/profiles/${encodeURIComponent(name)}`);
     try {
         await fetch(url, {method: 'DELETE'});
         loadWpProfiles();
@@ -5405,7 +5410,7 @@ async function wpDeleteProfile(name) {
 
 // --- WP Key Plugins ---
 async function loadWpKeyPlugins() {
-    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/plugins/keys` : '/api/wp/plugins/keys';
+    const url = wpApiUrl(`/api/wp/plugins/keys`);
     try {
         const res = await fetch(url);
         wpKeyPlugins = await res.json();
@@ -5433,7 +5438,7 @@ async function loadWpKeyPlugins() {
 function wpLoadApplyProfileSelect() {
     const select = document.getElementById('wp-apply-profile-select');
     if (!select) return;
-    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/profiles` : '/api/wp/profiles';
+    const url = wpApiUrl(`/api/wp/profiles`);
     fetch(url).then(r => r.json()).then(profiles => {
         select.innerHTML = '<option value="">Select a profile...</option>';
         (Array.isArray(profiles) ? profiles : []).forEach(p => {
@@ -5475,7 +5480,7 @@ function wpApplyProfileToAllEvents() {
     const name = select?.value;
     if (!name) { showToast('Select a profile first', 'warning'); return; }
 
-    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/profiles` : '/api/wp/profiles';
+    const url = wpApiUrl(`/api/wp/profiles`);
     fetch(url).then(r => r.json()).then(profiles => {
         const profile = profiles.find(p => p.name === name);
         if (!profile || !profile.settings) { showToast('Profile not found', 'error'); return; }
@@ -5546,7 +5551,7 @@ function wpOnRowProfileChanged(selectEl) {
         return;
     }
 
-    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/profiles` : '/api/wp/profiles';
+    const url = wpApiUrl(`/api/wp/profiles`);
     fetch(url).then(r => r.json()).then(profiles => {
         const profile = profiles.find(p => p.name === profileName);
         if (!profile || !profile.settings) return;
@@ -5655,7 +5660,7 @@ async function wpPushToTarget() {
     // Safety confirmation for broad targets (backend queues live devices).
     if (scope !== 'device' && !confirm('Apply settings to all matching devices?')) return;
 
-    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/profiles/apply` : '/api/wp/profiles/apply';
+    const url = wpApiUrl(`/api/wp/profiles/apply`);
     try {
         const res = await fetch(url, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
         const data = await res.json();
@@ -5687,7 +5692,7 @@ async function wpPushEventToDevices(buttonEl) {
     if (!row) return;
     const id = (row.querySelector('.sch-id')?.value || '').trim();
     if (!id) { showToast('Event has no id to push', 'warning'); return; }
-    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/schedule/${encodeURIComponent(id)}/apply` : `/api/wp/schedule/${encodeURIComponent(id)}/apply`;
+    const url = wpApiUrl(`/api/wp/schedule/${encodeURIComponent(id)}/apply`);
     try {
         const res = await fetch(url, { method: 'POST' });
         const data = await res.json();
@@ -5703,7 +5708,7 @@ async function wpPushEventToDevices(buttonEl) {
 }
 
 async function wpSaveAutoApplyEvent(checked) {
-    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/config` : '/api/wp/config';
+    const url = wpApiUrl(`/api/wp/config`);
     try {
         await fetch(url, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ wp_auto_apply_event: checked }) });
     } catch (_) {}
@@ -5712,7 +5717,7 @@ async function wpSaveAutoApplyEvent(checked) {
 async function wpLoadAutoApplyEvent() {
     const checkbox = document.getElementById('wp-auto-apply-event');
     if (!checkbox) return;
-    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/config` : '/api/wp/config';
+    const url = wpApiUrl(`/api/wp/config`);
     try {
         const res = await fetch(url);
         const data = await res.json();
@@ -5727,7 +5732,7 @@ async function wpFetchKeys() {
     if (!pluginName) { showToast('Select a key provider first', 'warning'); return; }
 
     if (status) status.textContent = 'Fetching keys...';
-    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/plugins/keys/fetch/${pluginName}` : `/api/wp/plugins/keys/fetch/${pluginName}`;
+    const url = wpApiUrl(`/api/wp/plugins/keys/fetch/${pluginName}`);
     try {
         const res = await fetch(url, { method: 'POST' });
         const data = await res.json();
@@ -5735,7 +5740,7 @@ async function wpFetchKeys() {
             if (status) status.textContent = data.error;
             return;
         }
-        const saveUrl = WP_API_BASE ? `${WP_API_BASE}/api/wp/active` : '/api/wp/active';
+        const saveUrl = wpApiUrl(`/api/wp/active`);
         await fetch(saveUrl, {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
@@ -5751,7 +5756,7 @@ async function wpFetchKeys() {
 
 // --- WP Active Metadata Schedule Panel ---
 async function wpLoadPluginSelector() {
-    const url = HD_API_BASE ? `${HD_API_BASE}/api/plugins` : '/api/plugins';
+    const url = hdApiUrl(`/api/plugins`);
     try {
         const res = await fetch(url);
         const plugins = await res.json();
@@ -5839,7 +5844,7 @@ async function wpTriggerPluginSync() {
     }
 
     if (status) status.textContent = 'Syncing...';
-    const url = HD_API_BASE ? `${HD_API_BASE}/api/plugins/run/${pluginName}` : `/api/plugins/run/${pluginName}`;
+    const url = hdApiUrl(`/api/plugins/run/${pluginName}`);
     const payload = readPluginInputs('wp-plugin', plugin?.inputs || []);
     try {
         const res = await fetch(url, {
@@ -5872,7 +5877,7 @@ async function wpUploadScheduleFile() {
     const formData = new FormData();
     formData.append('file', fileInput.files[0]);
 
-    const url = HD_API_BASE ? `${HD_API_BASE}/api/plugins/upload/${pluginName}` : `/api/plugins/upload/${pluginName}`;
+    const url = hdApiUrl(`/api/plugins/upload/${pluginName}`);
     try {
         const res = await fetch(url, {method: 'POST', body: formData});
         const data = await res.json();
@@ -5914,14 +5919,14 @@ function wpUpdateStagedEventHud() {
 function wpClearActiveEvent() {
     globallyActiveEventId = 'default';
     wpUpdateStagedEventHud();
-    const url = HD_API_BASE ? `${HD_API_BASE}/api/schedule/active` : '/api/schedule/active';
+    const url = hdApiUrl(`/api/schedule/active`);
     fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id: ''})});
 }
 
 // --- WP Schedule (uses shared scheduleDataCache) ---
 
 async function loadWpSchedule() {
-    const url = HD_API_BASE ? `${HD_API_BASE}/api/schedule` : '/api/schedule';
+    const url = hdApiUrl(`/api/schedule`);
     try {
         const res = await fetch(url);
         const data = await res.json();
@@ -5929,7 +5934,7 @@ async function loadWpSchedule() {
         wpFilterSchedule();
         wpUpdateStageSelectors();
     } catch (_) {
-        const wpUrl = WP_API_BASE ? `${WP_API_BASE}/api/wp/schedule` : '/api/wp/schedule';
+        const wpUrl = wpApiUrl(`/api/wp/schedule`);
         try {
             const res = await fetch(wpUrl);
             const data = await res.json();
@@ -6051,7 +6056,7 @@ function wpStageEvent(idx) {
         wpApplyProfile(merged.stream_profile);
     }
 
-    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/active` : '/api/wp/active';
+    const url = wpApiUrl(`/api/wp/active`);
     fetch(url, {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -6086,7 +6091,7 @@ function wpAddEvent() {
 
 async function wpSaveSchedule() {
     mergeVisibleRowsIntoCache();
-    const url = HD_API_BASE ? `${HD_API_BASE}/api/schedule` : '/api/schedule';
+    const url = hdApiUrl(`/api/schedule`);
     try {
         await fetch(url, {
             method: 'POST',
@@ -6096,7 +6101,7 @@ async function wpSaveSchedule() {
         wpFilterSchedule();
         showToast('Schedule saved', 'success');
     } catch (_) {
-        const wpUrl = WP_API_BASE ? `${WP_API_BASE}/api/wp/schedule` : '/api/wp/schedule';
+        const wpUrl = wpApiUrl(`/api/wp/schedule`);
         try {
             await fetch(wpUrl, {
                 method: 'POST',
@@ -6113,7 +6118,7 @@ async function wpSaveSchedule() {
 
 // --- YouTube Config ---
 async function loadYoutubeConfig() {
-    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/plugins/keys/youtube/config` : '/api/wp/plugins/keys/youtube/config';
+    const url = wpApiUrl(`/api/wp/plugins/keys/youtube/config`);
     try {
         const res = await fetch(url);
         const data = await res.json();
@@ -6140,7 +6145,7 @@ async function saveYoutubeConfig() {
         return;
     }
 
-    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/plugins/keys/youtube/config` : '/api/wp/plugins/keys/youtube/config';
+    const url = wpApiUrl(`/api/wp/plugins/keys/youtube/config`);
     try {
         const res = await fetch(url, {
             method: 'POST',
@@ -6171,7 +6176,7 @@ async function youtubeSignIn() {
     // Save credentials first
     await saveYoutubeConfig();
 
-    const url = WP_API_BASE ? `${WP_API_BASE}/api/wp/plugins/keys/youtube/authorize` : '/api/wp/plugins/keys/youtube/authorize';
+    const url = wpApiUrl(`/api/wp/plugins/keys/youtube/authorize`);
     try {
         const res = await fetch(url);
         const data = await res.json();
@@ -6299,7 +6304,7 @@ async function _detectServices() {
     if (IS_HD) {
         // We're on HyperDeck, probe WP
         try {
-            const res = await fetch(`${WP_API_BASE}/api/wp/state`, {signal: AbortSignal.timeout(2000)});
+            const res = await wpFetch(`/api/wp/state`, {signal: AbortSignal.timeout(2000)});
             if (res.ok) {
                 servicesAvailable.webpresenter = true;
                 wpTab.style.display = '';
@@ -6308,7 +6313,7 @@ async function _detectServices() {
     } else if (IS_WP) {
         // We're on WP, probe HyperDeck
         try {
-            const res = await fetch(`${HD_API_BASE}/api/state`, {signal: AbortSignal.timeout(2000)});
+            const res = await hdFetch(`/api/state`, {signal: AbortSignal.timeout(2000)});
             if (res.ok) {
                 servicesAvailable.hyperdeck = true;
                 hdTab.style.display = '';
