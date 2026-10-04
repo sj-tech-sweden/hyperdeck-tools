@@ -89,15 +89,38 @@ def _get_access_token(config: dict) -> str:
     raise RuntimeError(f"Failed to acquire token: {error}")
 
 
+def _normalize_site_id(site_url: str) -> str:
+    """Normalize a user-supplied site reference into a Graph site-id.
+
+    Accepts a full URL (https://contoso.sharepoint.com/sites/Team), a bare
+    hostname (contoso.sharepoint.com), or an already-correct Graph site-id
+    (contoso.sharepoint.com:/sites/Team) and returns the Graph form.
+    """
+    import urllib.parse
+
+    site_url = (site_url or "").strip()
+    if not site_url:
+        return ""
+    lowered = site_url.lower()
+    if lowered.startswith("http://") or lowered.startswith("https://"):
+        parsed = urllib.parse.urlparse(site_url)
+        host = parsed.netloc or parsed.path
+        path = parsed.path or ""
+        if path in ("", "/"):
+            return host
+        return f"{host}:{path}"
+    return site_url
+
+
 def _get_drive_base_url(config: dict) -> str:
     """Get the Graph API base URL for the configured drive."""
     auth_mode = config.get("auth_mode", "onedrive").lower()
     if auth_mode == "sharepoint_app":
-        site_url = config.get("site_url", "").strip().rstrip("/")
+        site_url = _normalize_site_id(config.get("site_url", ""))
         if not site_url:
             raise ValueError("site_url is required for SharePoint auth mode")
         import urllib.parse
-        encoded_site = urllib.parse.quote(site_url, safe="")
+        encoded_site = urllib.parse.quote(site_url, safe=":/")
         return f"https://graph.microsoft.com/v1.0/sites/{encoded_site}/drive/root"
     else:
         return "https://graph.microsoft.com/v1.0/me/drive/root"
@@ -114,6 +137,8 @@ def _list_sites(token: str) -> list[dict]:
     ``sites?search=*`` (enumerates all sites), combining the results. A failure
     in one call is tolerated; only if *all* calls fail is an error raised.
     """
+    import urllib.parse
+
     import requests
 
     headers = {"Authorization": f"Bearer {token}"}
@@ -131,13 +156,26 @@ def _list_sites(token: str) -> list[dict]:
         for site in items:
             sc = site.get("siteCollection", {})
             hostname = sc.get("hostname", "")
-            if hostname:
-                found[hostname] = {
-                    "hostname": hostname,
-                    "webUrl": site.get("webUrl", ""),
-                    "displayName": site.get("displayName", ""),
-                    "site_url": f"https://{hostname}",
-                }
+            if not hostname:
+                continue
+            web_url = site.get("webUrl", "")
+            path = ""
+            if web_url:
+                parsed = urllib.parse.urlparse(web_url)
+                path = parsed.path or ""
+            if path in ("", "/"):
+                graph_site_id = hostname
+                display = web_url or f"https://{hostname}"
+            else:
+                graph_site_id = f"{hostname}:{path}"
+                display = web_url
+            found[graph_site_id] = {
+                "hostname": hostname,
+                "webUrl": web_url,
+                "displayName": site.get("displayName", ""),
+                "site_url": graph_site_id,
+                "display": display,
+            }
         return data.get("@odata.nextLink")
 
     def _walk(url: str) -> None:
@@ -220,11 +258,11 @@ def test_connection(config: dict) -> dict:
         headers = {"Authorization": f"Bearer {token}"}
 
         if auth_mode == "sharepoint_app":
-            site_url = config.get("site_url", "").strip()
+            site_url = _normalize_site_id(config.get("site_url", ""))
             if not site_url:
                 return {"ok": False, "message": "site_url is required for SharePoint."}
             import urllib.parse
-            encoded_site = urllib.parse.quote(site_url, safe="")
+            encoded_site = urllib.parse.quote(site_url, safe=":/")
             resp = requests.get(
                 f"https://graph.microsoft.com/v1.0/sites/{encoded_site}",
                 headers=headers,
@@ -239,7 +277,7 @@ def test_connection(config: dict) -> dict:
                 extra = ""
                 try:
                     discovered = _list_sites(token)
-                    hosts = sorted({s["site_url"] for s in discovered if s["site_url"]})
+                    hosts = sorted({s.get("display", s["site_url"]) for s in discovered if s.get("site_url")})
                     if hosts:
                         extra = " Valid site URLs in this tenancy: " + ", ".join(hosts)
                     else:

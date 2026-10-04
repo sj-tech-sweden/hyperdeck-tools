@@ -1111,9 +1111,9 @@ async function listSharepointSites() {
             return;
         }
         container.innerHTML = data.sites.map(s => `
-            <button type="button" onclick="selectSharepointSite('${escAttr(s.site_url)}')" class="block w-full text-left text-[10px] text-slate-300 hover:text-white bg-slate-900 border border-slate-800 rounded px-2 py-1">
+                <button type="button" onclick="selectSharepointSite('${escAttr(s.site_url)}', '${escAttr(s.display || s.site_url)}')" class="block w-full text-left text-[10px] text-slate-300 hover:text-white bg-slate-900 border border-slate-800 rounded px-2 py-1">
                 <span class="font-medium">${escHtml(s.displayName || s.hostname || 'Site')}</span>
-                <span class="text-slate-500"> — ${escHtml(s.site_url)}</span>
+                <span class="text-slate-500"> — ${escHtml(s.display || s.site_url)}</span>
             </button>
         `).join('');
     } catch (e) {
@@ -1121,11 +1121,12 @@ async function listSharepointSites() {
     }
 }
 
-function selectSharepointSite(siteUrl) {
+function selectSharepointSite(siteUrl, display) {
     const input = document.getElementById('sd-field-site_url');
     if (input) input.value = siteUrl;
+    const label = display || siteUrl;
     const container = document.getElementById('sd-sharepoint-sites');
-    if (container) container.innerHTML = `<div class="text-[10px] text-emerald-400">Selected: ${escHtml(siteUrl)}</div>`;
+    if (container) container.innerHTML = `<div class="text-[10px] text-emerald-400">Selected: ${escHtml(label)}</div>`;
 }
 
 async function testStorageConnection() {
