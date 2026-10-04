@@ -60,7 +60,7 @@ services:
   # If the Docker Hub image is unavailable, use the GHCR mirror instead:
   #   image: ghcr.io/deuxfleurs/garage:v1.0.0
   garage:
-    image: dxflrs/garage:v1.0.0
+    image: dxflrs/garage:v1.3.1
     # In v1.0 `--config` is a GLOBAL flag, before the subcommand.
     command: ["/garage", "--config", "/garage.toml", "server"]
     environment:
