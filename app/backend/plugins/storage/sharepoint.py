@@ -89,18 +89,117 @@ def _get_access_token(config: dict) -> str:
     raise RuntimeError(f"Failed to acquire token: {error}")
 
 
+def _normalize_site_id(site_url: str) -> str:
+    """Normalize a user-supplied site reference into a Graph site-id.
+
+    Accepts a full URL (https://contoso.sharepoint.com/sites/Team), a bare
+    hostname (contoso.sharepoint.com), or an already-correct Graph site-id
+    (contoso.sharepoint.com:/sites/Team) and returns the Graph form.
+    """
+    import urllib.parse
+
+    site_url = (site_url or "").strip()
+    if not site_url:
+        return ""
+    lowered = site_url.lower()
+    if lowered.startswith("http://") or lowered.startswith("https://"):
+        parsed = urllib.parse.urlparse(site_url)
+        host = parsed.netloc or parsed.path
+        path = parsed.path or ""
+        if path in ("", "/"):
+            return host
+        return f"{host}:{path}"
+    return site_url
+
+
 def _get_drive_base_url(config: dict) -> str:
     """Get the Graph API base URL for the configured drive."""
     auth_mode = config.get("auth_mode", "onedrive").lower()
     if auth_mode == "sharepoint_app":
-        site_url = config.get("site_url", "").strip().rstrip("/")
+        site_url = _normalize_site_id(config.get("site_url", ""))
         if not site_url:
             raise ValueError("site_url is required for SharePoint auth mode")
         import urllib.parse
-        encoded_site = urllib.parse.quote(site_url, safe="")
+        encoded_site = urllib.parse.quote(site_url, safe=":/")
         return f"https://graph.microsoft.com/v1.0/sites/{encoded_site}/drive/root"
     else:
         return "https://graph.microsoft.com/v1.0/me/drive/root"
+
+
+def _list_sites(token: str) -> list[dict]:
+    """Return sites visible to the token, with their SharePoint hostnames.
+
+    Used to help the user discover the correct ``site_url`` — Graph rejects a
+    host that does not belong to the token's tenancy with
+    "Invalid hostname for this tenancy".
+
+    Queries ``sites/root`` (always returns the tenant's root host) and
+    ``sites?search=*`` (enumerates all sites), combining the results. A failure
+    in one call is tolerated; only if *all* calls fail is an error raised.
+    """
+    import urllib.parse
+
+    import requests
+
+    headers = {"Authorization": f"Bearer {token}"}
+    found: dict[str, dict] = {}
+    errors: list[str] = []
+
+    def _consume(resp):
+        if resp.status_code != 200:
+            msg = resp.json().get("error", {}).get("message", resp.text[:200])
+            raise RuntimeError(f"Graph error {resp.status_code}: {msg}")
+        data = resp.json()
+        items = data.get("value", [])
+        if not items and "siteCollection" in data:
+            items = [data]
+        for site in items:
+            sc = site.get("siteCollection", {})
+            hostname = sc.get("hostname", "")
+            if not hostname:
+                continue
+            web_url = site.get("webUrl", "")
+            path = ""
+            if web_url:
+                parsed = urllib.parse.urlparse(web_url)
+                path = parsed.path or ""
+            if path in ("", "/"):
+                graph_site_id = hostname
+                display = web_url or f"https://{hostname}"
+            else:
+                graph_site_id = f"{hostname}:{path}"
+                display = web_url
+            found[graph_site_id] = {
+                "hostname": hostname,
+                "webUrl": web_url,
+                "displayName": site.get("displayName", ""),
+                "site_url": graph_site_id,
+                "display": display,
+            }
+        return data.get("@odata.nextLink")
+
+    def _walk(url: str) -> None:
+        nxt = url
+        while nxt:
+            resp = requests.get(nxt, headers=headers, timeout=15)
+            nxt = _consume(resp)
+
+    # 1) Root site — most reliable, yields the tenant's primary host.
+    try:
+        _walk("https://graph.microsoft.com/v1.0/sites/root")
+    except Exception as e:
+        errors.append(f"root: {e}")
+
+    # 2) Enumerate all sites (some tenants reject the `*` query — tolerated).
+    try:
+        _walk("https://graph.microsoft.com/v1.0/sites?search=*")
+    except Exception as e:
+        errors.append(f"search: {e}")
+
+    if not found and errors:
+        raise RuntimeError("; ".join(errors))
+    return list(found.values())
+
 
 
 def send_file(local_path: str, remote_name: str, config: dict) -> bool:
@@ -159,11 +258,11 @@ def test_connection(config: dict) -> dict:
         headers = {"Authorization": f"Bearer {token}"}
 
         if auth_mode == "sharepoint_app":
-            site_url = config.get("site_url", "").strip()
+            site_url = _normalize_site_id(config.get("site_url", ""))
             if not site_url:
                 return {"ok": False, "message": "site_url is required for SharePoint."}
             import urllib.parse
-            encoded_site = urllib.parse.quote(site_url, safe="")
+            encoded_site = urllib.parse.quote(site_url, safe=":/")
             resp = requests.get(
                 f"https://graph.microsoft.com/v1.0/sites/{encoded_site}",
                 headers=headers,
@@ -175,7 +274,17 @@ def test_connection(config: dict) -> dict:
                 return {"ok": True, "message": f"Connected to SharePoint site: {name}"}
             else:
                 error = resp.json().get("error", {}).get("message", resp.text[:200])
-                return {"ok": False, "message": f"SharePoint error: {error}"}
+                extra = ""
+                try:
+                    discovered = _list_sites(token)
+                    hosts = sorted({s.get("display", s["site_url"]) for s in discovered if s.get("site_url")})
+                    if hosts:
+                        extra = " Valid site URLs in this tenancy: " + ", ".join(hosts)
+                    else:
+                        extra = " (no sites could be enumerated for this tenancy)"
+                except Exception as e:
+                    extra = f" (could not enumerate sites: {e})"
+                return {"ok": False, "message": f"SharePoint error: {error}{extra}"}
         else:
             resp = requests.get(
                 "https://graph.microsoft.com/v1.0/me",

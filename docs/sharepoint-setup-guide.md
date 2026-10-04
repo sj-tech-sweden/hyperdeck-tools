@@ -182,7 +182,11 @@ Your site URL looks like one of these:
 - `https://contoso.sharepoint.com/sites/ingest`
 - `https://contoso.sharepoint.com`
 
-You can find it by going to your SharePoint site in a browser and copying the URL.
+ You can find it by going to your SharePoint site in a browser and copying the URL.
+
+ To avoid guessing, click **List available sites** in the destination dialog (SharePoint
+ plugin). It calls Microsoft Graph with your configured credentials and lists every
+ site/hostname available in the tenancy — click one to fill the **Site URL** field.
 
 ### Step 5: Configure the Plugin
 
@@ -227,6 +231,15 @@ Click **Test Connection** to verify, then **Save**.
 - Verify the **Site URL** is exactly as shown in your browser
 - Include the full path: `https://contoso.sharepoint.com/sites/mysite`
 - Try accessing the URL in a browser first to confirm it exists
+
+### "Invalid hostname for this tenancy"
+
+- The host in your **Site URL** does not belong to the Azure AD tenant you
+  acquired the token for (the **Tenant ID** in the config). They must match.
+- Use **List available sites** in the destination dialog — it returns the exact
+  site URLs that Graph considers valid for that tenancy, so copy one of those.
+- If the listed hostnames are empty, the app likely lacks the
+  `Sites.ReadWrite.All` (Application) permission, or the wrong tenant is set.
 
 ### Token Expired
 

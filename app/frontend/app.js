@@ -271,7 +271,7 @@ async function loadSettingsGroupsOptionSuggestions(host) {
     if (settingsGroupsOptionSuggestionsCache[normalizedHost]) return settingsGroupsOptionSuggestionsCache[normalizedHost];
 
     try {
-        const res = await fetch(`/api/control/${encodeURIComponent(normalizedHost)}/configuration`);
+        const res = await fetch(`${HD_API_BASE}/api/control/${encodeURIComponent(normalizedHost)}/configuration`);
         if (!res.ok) throw new Error('fetch failed');
         const data = await res.json();
         const payload = {
@@ -937,12 +937,17 @@ async function loadStorageDestinations() {
             if (queue.completed > 0) queueSummary.push(`${queue.completed} done`);
             const queueText = queueSummary.length > 0 ? queueSummary.join(', ') : 'Idle';
 
+            const dotId = `sd-conn-dot-${escAttr(dest.id)}`;
+            const initialDot = dest.enabled
+                ? `<span id="${dotId}" class="w-1.5 h-1.5 bg-slate-500 rounded-full animate-pulse" title="Testing connection…"></span>`
+                : `<span id="${dotId}" class="w-1.5 h-1.5 bg-slate-600 rounded-full" title="Disabled"></span>`;
+
             row.innerHTML = `
                 <div class="flex-1 min-w-0">
                     <div class="flex items-center gap-2">
                         <span class="text-slate-200 font-medium truncate">${escHtml(dest.label)}</span>
                         <span class="text-[9px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">${escHtml(pluginLabel)}</span>
-                        ${dest.enabled ? '<span class="w-1.5 h-1.5 bg-emerald-400 rounded-full"></span>' : '<span class="w-1.5 h-1.5 bg-slate-600 rounded-full"></span>'}
+                        ${initialDot}
                     </div>
                     <div class="text-[10px] text-slate-500 mt-0.5">Queue: ${escHtml(queueText)}</div>
                 </div>
@@ -952,10 +957,40 @@ async function loadStorageDestinations() {
                 </div>
             `;
             list.appendChild(row);
+            updateDestinationStatus(dest);
         });
     } catch (e) {
         console.error('Failed to load storage destinations:', e);
         list.innerHTML = '<div class="text-[11px] text-rose-400 px-2 py-2">Failed to load storage destinations.</div>';
+    }
+}
+
+async function updateDestinationStatus(dest) {
+    const dot = document.getElementById(`sd-conn-dot-${dest.id}`);
+    if (!dot) return;
+    if (!dest.enabled) {
+        dot.className = 'w-1.5 h-1.5 bg-slate-600 rounded-full';
+        dot.title = 'Disabled';
+        return;
+    }
+    const endpoint = `${HD_API_BASE}/api/storage-plugins/${encodeURIComponent(dest.plugin_type)}/test`;
+    try {
+        const res = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ config: dest.config || {} }),
+        });
+        const data = await res.json();
+        if (data.ok) {
+            dot.className = 'w-1.5 h-1.5 bg-emerald-400 rounded-full';
+            dot.title = 'Online' + (data.message ? ': ' + data.message : '');
+        } else {
+            dot.className = 'w-1.5 h-1.5 bg-rose-500 rounded-full';
+            dot.title = 'Offline' + (data.message ? ': ' + data.message : '');
+        }
+    } catch (e) {
+        dot.className = 'w-1.5 h-1.5 bg-slate-600 rounded-full';
+        dot.title = 'Status unknown';
     }
 }
 
@@ -1044,6 +1079,54 @@ function onStoragePluginTypeChanged() {
         `;
         fieldsContainer.appendChild(wrapper);
     });
+
+    if (storageType === 'sharepoint') {
+        const helper = document.createElement('div');
+        helper.innerHTML = `
+            <button type="button" onclick="listSharepointSites()" class="mt-2 text-[11px] bg-slate-800 text-slate-300 border border-slate-700 rounded px-2.5 py-1.5 hover:bg-slate-700 hover:text-white transition cursor-pointer">List available sites</button>
+            <div id="sd-sharepoint-sites" class="mt-2 space-y-1"></div>
+        `;
+        fieldsContainer.appendChild(helper);
+    }
+}
+
+async function listSharepointSites() {
+    const container = document.getElementById('sd-sharepoint-sites');
+    if (!container) return;
+    const config = collectStorageConfigFields();
+    container.innerHTML = '<div class="text-[10px] text-slate-500">Loading sites…</div>';
+    try {
+        const res = await fetch((HD_API_BASE || '') + '/api/storage/sharepoint/sites', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ config }),
+        });
+        const data = await res.json();
+        if (!data.ok) {
+            container.innerHTML = `<div class="text-[10px] text-rose-400">${escHtml(data.error || 'Failed to list sites')}</div>`;
+            return;
+        }
+        if (!data.sites || data.sites.length === 0) {
+            container.innerHTML = '<div class="text-[10px] text-slate-500">No sites returned for this tenancy.</div>';
+            return;
+        }
+        container.innerHTML = data.sites.map(s => `
+                <button type="button" onclick="selectSharepointSite('${escAttr(s.site_url)}', '${escAttr(s.display || s.site_url)}')" class="block w-full text-left text-[10px] text-slate-300 hover:text-white bg-slate-900 border border-slate-800 rounded px-2 py-1">
+                <span class="font-medium">${escHtml(s.displayName || s.hostname || 'Site')}</span>
+                <span class="text-slate-500"> — ${escHtml(s.display || s.site_url)}</span>
+            </button>
+        `).join('');
+    } catch (e) {
+        container.innerHTML = '<div class="text-[10px] text-rose-400">Request failed.</div>';
+    }
+}
+
+function selectSharepointSite(siteUrl, display) {
+    const input = document.getElementById('sd-field-site_url');
+    if (input) input.value = siteUrl;
+    const label = display || siteUrl;
+    const container = document.getElementById('sd-sharepoint-sites');
+    if (container) container.innerHTML = `<div class="text-[10px] text-emerald-400">Selected: ${escHtml(label)}</div>`;
 }
 
 async function testStorageConnection() {
@@ -1061,7 +1144,7 @@ async function testStorageConnection() {
     testStatus.className = 'text-[11px] text-slate-400';
 
     try {
-        const res = await fetch(`/api/storage-plugins/${encodeURIComponent(storageType)}/test`, {
+        const res = await fetch(`${HD_API_BASE}/api/storage-plugins/${encodeURIComponent(storageType)}/test`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ config }),
@@ -1148,7 +1231,7 @@ async function editStorageDestination(destId) {
 async function deleteStorageDestination(destId, label) {
     if (!confirm(`Delete storage destination "${label}"?`)) return;
     try {
-        const res = await fetch(`/api/storage-destinations/${encodeURIComponent(destId)}`, { method: 'DELETE' });
+        const res = await fetch(`${HD_API_BASE}/api/storage-destinations/${encodeURIComponent(destId)}`, { method: 'DELETE' });
         if (res.ok) {
             loadStorageDestinations();
             showToast('Storage destination deleted.', 'success');
@@ -1326,7 +1409,7 @@ function insertToken(token) {
 
 // --- Host Filesystem Explorer Controller Logic ---
 async function navigateFolder(targetPath = "") {
-    const url = `/api/browse?path=${encodeURIComponent(targetPath)}`;
+    const url = `${HD_API_BASE}/api/browse?path=${encodeURIComponent(targetPath)}`;
     const list = document.getElementById('modal-folder-list');
     list.innerHTML = '<li class="text-slate-500 text-center p-4 italic">Querying host path...</li>';
     
@@ -2043,7 +2126,7 @@ function updatePluginDetails() {
 async function sendDeckCommand(host, command) {
     const label = command === 'record' ? '⏺ Recording' : '⏹ Stopped';
     try {
-        const res = await fetch(`/api/control/${encodeURIComponent(host)}/${command}`, { method: 'POST' });
+        const res = await fetch(`${HD_API_BASE}/api/control/${encodeURIComponent(host)}/${command}`, { method: 'POST' });
         let data;
         try { data = await res.json(); } catch (_) { data = {}; }
         if (!res.ok) {
@@ -2070,7 +2153,7 @@ async function sendCommandToAll(command) {
         btn.innerText = command === 'record' ? '⏺ Recording…' : '⏹ Stopping…';
     }
     try {
-        const res = await fetch(`/api/control/all/${command}`, { method: 'POST' });
+        const res = await fetch(`${HD_API_BASE}/api/control/all/${command}`, { method: 'POST' });
         let data;
         try { data = await res.json(); } catch (_) { data = {}; }
         if (!res.ok) {
@@ -2303,14 +2386,14 @@ async function _saveSettingsGroup(name, targets, settings, field_keys) {
 }
 
 async function _applySettingsGroup(name) {
-    const res = await fetch(`/api/control/settings-groups/${encodeURIComponent(name)}/apply`, { method: 'POST' });
+    const res = await fetch(`${HD_API_BASE}/api/control/settings-groups/${encodeURIComponent(name)}/apply`, { method: 'POST' });
     let data;
     try { data = await res.json(); } catch (_) { data = {}; }
     return { ok: res.ok, data };
 }
 
 async function _deleteSettingsGroup(name) {
-    const res = await fetch(`/api/control/settings-groups/${encodeURIComponent(name)}`, { method: 'DELETE' });
+    const res = await fetch(`${HD_API_BASE}/api/control/settings-groups/${encodeURIComponent(name)}`, { method: 'DELETE' });
     let data;
     try { data = await res.json(); } catch (_) { data = {}; }
     return { ok: res.ok, data };
@@ -2865,7 +2948,7 @@ async function loadDeckFormatSlotOptions(host) {
     const previous = slotSelect.value || '1';
     slotSelect.innerHTML = '';
     try {
-        const res = await fetch(`/api/control/${encodeURIComponent(host)}/slots`);
+        const res = await fetch(`${HD_API_BASE}/api/control/${encodeURIComponent(host)}/slots`);
         let data;
         try { data = await res.json(); } catch (_) { data = {}; }
         const slots = Array.isArray(data.slots) && data.slots.length > 0 ? data.slots : ['1'];
@@ -2973,7 +3056,7 @@ async function confirmDeckFormatAction() {
     pendingDeckFormatRequest = null;
 
     try {
-        const res = await fetch(`/api/control/${encodeURIComponent(host)}/format-card`, {
+        const res = await fetch(`${HD_API_BASE}/api/control/${encodeURIComponent(host)}/format-card`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -3063,7 +3146,7 @@ async function loadDeckRecordingsList() {
     statusEl.innerText = '';
 
     try {
-        const res = await fetch(`/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/recordings?slot_id=${encodeURIComponent(slotId)}`);
+        const res = await fetch(`${HD_API_BASE}/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/recordings?slot_id=${encodeURIComponent(slotId)}`);
         let data;
         try { data = await res.json(); } catch (_) { data = {}; }
 
@@ -3169,7 +3252,7 @@ async function transferDeckRecording(remoteFilename) {
 
     let resolvedLocalFilename = remoteFilename;
     try {
-        const previewRes = await fetch(`/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/transfer-preview`, {
+        const previewRes = await fetch(`${HD_API_BASE}/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/transfer-preview`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ slot_id: slotId, remote_filename: remoteFilename }),
@@ -3184,7 +3267,7 @@ async function transferDeckRecording(remoteFilename) {
 
     if (statusEl) statusEl.innerText = `Transferring ${remoteFilename} as ${resolvedLocalFilename}...`;
     try {
-        const res = await fetch(`/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/transfer-recording`, {
+        const res = await fetch(`${HD_API_BASE}/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/transfer-recording`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ slot_id: slotId, remote_filename: remoteFilename, local_filename: resolvedLocalFilename }),
@@ -3248,7 +3331,7 @@ async function loadDeckClipOptions() {
     currentDeckClipMap = [];
 
     try {
-        const res = await fetch(`/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/clips?slot_id=${encodeURIComponent(slotId)}`);
+        const res = await fetch(`${HD_API_BASE}/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/clips?slot_id=${encodeURIComponent(slotId)}`);
         let data;
         try { data = await res.json(); } catch (_) { data = {}; }
 
@@ -3315,7 +3398,7 @@ async function uploadDeckPlaybackFile() {
     try {
         const data = await new Promise((resolve, reject) => {
             const xhr = new XMLHttpRequest();
-            xhr.open('POST', `/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/upload-playback?slot_id=${encodeURIComponent(slotId)}`);
+            xhr.open('POST', `${HD_API_BASE}/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/upload-playback?slot_id=${encodeURIComponent(slotId)}`);
 
             xhr.upload.onprogress = (event) => {
                 if (!event.lengthComputable) return;
@@ -3368,7 +3451,7 @@ async function cueDeckPlayback() {
     }
 
     try {
-        const res = await fetch(`/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/cue`, {
+        const res = await fetch(`${HD_API_BASE}/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/cue`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ clip_id: clipId }),
@@ -3393,7 +3476,7 @@ async function playDeckNow() {
     const clipId = String(clipIdEl?.value || '').trim();
     try {
         const body = clipId ? JSON.stringify({ clip_id: clipId }) : undefined;
-        const res = await fetch(`/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/play`, {
+        const res = await fetch(`${HD_API_BASE}/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/play`, {
             method: 'POST',
             headers: body ? { 'Content-Type': 'application/json' } : undefined,
             body,
@@ -3413,7 +3496,7 @@ async function playDeckNow() {
 
 async function playDeckNowFromCard(host) {
     try {
-        const res = await fetch(`/api/control/${encodeURIComponent(host)}/play`, { method: 'POST' });
+        const res = await fetch(`${HD_API_BASE}/api/control/${encodeURIComponent(host)}/play`, { method: 'POST' });
         let data;
         try { data = await res.json(); } catch (_) { data = {}; }
         if (!res.ok) {
@@ -3441,7 +3524,7 @@ async function scheduleDeckPlayback() {
     const clipId = String(clipEl?.value || '').trim();
 
     try {
-        const res = await fetch(`/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/play-schedule`, {
+        const res = await fetch(`${HD_API_BASE}/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/play-schedule`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ play_at: playAtIso, clip_id: clipId }),
@@ -3463,7 +3546,7 @@ async function cancelDeckPlaybackSchedule() {
     if (!activeDeckRecordingsHost) return;
     const statusEl = document.getElementById('drm-playback-status');
     try {
-        const res = await fetch(`/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/play-schedule`, { method: 'DELETE' });
+        const res = await fetch(`${HD_API_BASE}/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/play-schedule`, { method: 'DELETE' });
         let data;
         try { data = await res.json(); } catch (_) { data = {}; }
         if (!res.ok) {
@@ -3486,7 +3569,7 @@ async function loadDeckSlotOptions() {
     const previous = slotSelect.value || '1';
     slotSelect.innerHTML = '';
     try {
-        const res = await fetch(`/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/slots`);
+        const res = await fetch(`${HD_API_BASE}/api/control/${encodeURIComponent(activeDeckRecordingsHost)}/slots`);
         let data;
         try { data = await res.json(); } catch (_) { data = {}; }
         const slots = Array.isArray(data.slots) && data.slots.length > 0 ? data.slots : ['1'];
@@ -3630,7 +3713,7 @@ async function openDeckSettings(host, name) {
     });
 
     try {
-        const res = await fetch(`/api/control/${encodeURIComponent(host)}/configuration`);
+        const res = await fetch(`${HD_API_BASE}/api/control/${encodeURIComponent(host)}/configuration`);
         let data;
         try { data = await res.json(); } catch (_) { data = {}; }
 
@@ -3726,7 +3809,7 @@ async function loadDeckSettingsDebug() {
     debugEl.innerText = 'Loading diagnostics from device probes...';
 
     try {
-        const res = await fetch(`/api/control/${encodeURIComponent(activeDeckSettingsHost)}/configuration?debug=true`);
+        const res = await fetch(`${HD_API_BASE}/api/control/${encodeURIComponent(activeDeckSettingsHost)}/configuration?debug=true`);
         let data;
         try { data = await res.json(); } catch (_) { data = {}; }
 
@@ -3857,7 +3940,7 @@ async function saveDeckSettings() {
     if (statusEl) statusEl.innerText = '';
 
     try {
-        const res = await fetch(`/api/control/${encodeURIComponent(requestHost)}/configuration`, {
+        const res = await fetch(`${HD_API_BASE}/api/control/${encodeURIComponent(requestHost)}/configuration`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(settings),
@@ -3878,7 +3961,7 @@ async function saveDeckSettings() {
             // Refresh only the current-values panel by re-fetching configuration.
             // This avoids resetting the selects and reopening the whole modal.
             try {
-                const cfgRes = await fetch(`/api/control/${encodeURIComponent(requestHost)}/configuration`);
+                const cfgRes = await fetch(`${HD_API_BASE}/api/control/${encodeURIComponent(requestHost)}/configuration`);
                 if (cfgRes.ok) {
                     const cfgData = await cfgRes.json();
                     if (activeDeckSettingsHost === requestHost) {
