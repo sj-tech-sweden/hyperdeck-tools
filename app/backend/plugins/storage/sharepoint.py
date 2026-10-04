@@ -104,34 +104,64 @@ def _get_drive_base_url(config: dict) -> str:
 
 
 def _list_sites(token: str) -> list[dict]:
-    """Return all sites visible to the token, with their SharePoint hostnames.
+    """Return sites visible to the token, with their SharePoint hostnames.
 
     Used to help the user discover the correct ``site_url`` — Graph rejects a
     host that does not belong to the token's tenancy with
     "Invalid hostname for this tenancy".
+
+    Queries ``sites/root`` (always returns the tenant's root host) and
+    ``sites?search=*`` (enumerates all sites), combining the results. A failure
+    in one call is tolerated; only if *all* calls fail is an error raised.
     """
     import requests
 
-    sites: list[dict] = []
-    url = "https://graph.microsoft.com/v1.0/sites?search=*"
     headers = {"Authorization": f"Bearer {token}"}
-    while url:
-        resp = requests.get(url, headers=headers, timeout=15)
+    found: dict[str, dict] = {}
+    errors: list[str] = []
+
+    def _consume(resp):
         if resp.status_code != 200:
             msg = resp.json().get("error", {}).get("message", resp.text[:200])
-            raise RuntimeError(f"Failed to list sites: {msg}")
+            raise RuntimeError(f"Graph error {resp.status_code}: {msg}")
         data = resp.json()
-        for site in data.get("value", []):
+        items = data.get("value", [])
+        if not items and "siteCollection" in data:
+            items = [data]
+        for site in items:
             sc = site.get("siteCollection", {})
             hostname = sc.get("hostname", "")
-            sites.append({
-                "hostname": hostname,
-                "webUrl": site.get("webUrl", ""),
-                "displayName": site.get("displayName", ""),
-                "site_url": f"https://{hostname}" if hostname else "",
-            })
-        url = data.get("@odata.nextLink")
-    return sites
+            if hostname:
+                found[hostname] = {
+                    "hostname": hostname,
+                    "webUrl": site.get("webUrl", ""),
+                    "displayName": site.get("displayName", ""),
+                    "site_url": f"https://{hostname}",
+                }
+        return data.get("@odata.nextLink")
+
+    def _walk(url: str) -> None:
+        nxt = url
+        while nxt:
+            resp = requests.get(nxt, headers=headers, timeout=15)
+            nxt = _consume(resp)
+
+    # 1) Root site — most reliable, yields the tenant's primary host.
+    try:
+        _walk("https://graph.microsoft.com/v1.0/sites/root")
+    except Exception as e:
+        errors.append(f"root: {e}")
+
+    # 2) Enumerate all sites (some tenants reject the `*` query — tolerated).
+    try:
+        _walk("https://graph.microsoft.com/v1.0/sites?search=*")
+    except Exception as e:
+        errors.append(f"search: {e}")
+
+    if not found and errors:
+        raise RuntimeError("; ".join(errors))
+    return list(found.values())
+
 
 
 def send_file(local_path: str, remote_name: str, config: dict) -> bool:
@@ -212,8 +242,10 @@ def test_connection(config: dict) -> dict:
                     hosts = sorted({s["site_url"] for s in discovered if s["site_url"]})
                     if hosts:
                         extra = " Valid site URLs in this tenancy: " + ", ".join(hosts)
-                except Exception:
-                    pass
+                    else:
+                        extra = " (no sites could be enumerated for this tenancy)"
+                except Exception as e:
+                    extra = f" (could not enumerate sites: {e})"
                 return {"ok": False, "message": f"SharePoint error: {error}{extra}"}
         else:
             resp = requests.get(

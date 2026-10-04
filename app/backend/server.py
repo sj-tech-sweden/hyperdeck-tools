@@ -1124,18 +1124,21 @@ async def list_sharepoint_sites(payload: dict[str, Any]):
     Lets the UI surface the valid ``site_url`` values for a tenancy, instead of
     the user having to guess and hit "Invalid hostname for this tenancy".
     """
-    from app.backend.plugins.storage.sharepoint import _get_access_token, _list_sites
+    try:
+        from app.backend.plugins.storage.sharepoint import _get_access_token, _list_sites
 
-    config = payload.get("config", {})
-    try:
-        token = _get_access_token(config)
+        config = payload.get("config", {})
+        try:
+            token = _get_access_token(config)
+        except Exception as e:
+            return {"ok": False, "error": f"Failed to acquire token: {e}", "sites": []}
+        try:
+            sites = _list_sites(token)
+            return {"ok": True, "sites": sites}
+        except Exception as e:
+            return {"ok": False, "error": str(e), "sites": []}
     except Exception as e:
-        return {"ok": False, "error": f"Failed to acquire token: {e}", "sites": []}
-    try:
-        sites = _list_sites(token)
-        return {"ok": True, "sites": sites}
-    except Exception as e:
-        return {"ok": False, "error": str(e), "sites": []}
+        return {"ok": False, "error": f"Unexpected error: {e}", "sites": []}
 
 
 @app.get("/api/storage-destinations/{dest_id}/queue")
