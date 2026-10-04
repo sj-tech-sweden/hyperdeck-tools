@@ -937,12 +937,17 @@ async function loadStorageDestinations() {
             if (queue.completed > 0) queueSummary.push(`${queue.completed} done`);
             const queueText = queueSummary.length > 0 ? queueSummary.join(', ') : 'Idle';
 
+            const dotId = `sd-conn-dot-${escAttr(dest.id)}`;
+            const initialDot = dest.enabled
+                ? `<span id="${dotId}" class="w-1.5 h-1.5 bg-slate-500 rounded-full animate-pulse" title="Testing connection…"></span>`
+                : `<span id="${dotId}" class="w-1.5 h-1.5 bg-slate-600 rounded-full" title="Disabled"></span>`;
+
             row.innerHTML = `
                 <div class="flex-1 min-w-0">
                     <div class="flex items-center gap-2">
                         <span class="text-slate-200 font-medium truncate">${escHtml(dest.label)}</span>
                         <span class="text-[9px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">${escHtml(pluginLabel)}</span>
-                        ${dest.enabled ? '<span class="w-1.5 h-1.5 bg-emerald-400 rounded-full"></span>' : '<span class="w-1.5 h-1.5 bg-slate-600 rounded-full"></span>'}
+                        ${initialDot}
                     </div>
                     <div class="text-[10px] text-slate-500 mt-0.5">Queue: ${escHtml(queueText)}</div>
                 </div>
@@ -952,10 +957,40 @@ async function loadStorageDestinations() {
                 </div>
             `;
             list.appendChild(row);
+            updateDestinationStatus(dest);
         });
     } catch (e) {
         console.error('Failed to load storage destinations:', e);
         list.innerHTML = '<div class="text-[11px] text-rose-400 px-2 py-2">Failed to load storage destinations.</div>';
+    }
+}
+
+async function updateDestinationStatus(dest) {
+    const dot = document.getElementById(`sd-conn-dot-${dest.id}`);
+    if (!dot) return;
+    if (!dest.enabled) {
+        dot.className = 'w-1.5 h-1.5 bg-slate-600 rounded-full';
+        dot.title = 'Disabled';
+        return;
+    }
+    const endpoint = `/api/storage-plugins/${encodeURIComponent(dest.plugin_type)}/test`;
+    try {
+        const res = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ config: dest.config || {} }),
+        });
+        const data = await res.json();
+        if (data.ok) {
+            dot.className = 'w-1.5 h-1.5 bg-emerald-400 rounded-full';
+            dot.title = 'Online' + (data.message ? ': ' + data.message : '');
+        } else {
+            dot.className = 'w-1.5 h-1.5 bg-rose-500 rounded-full';
+            dot.title = 'Offline' + (data.message ? ': ' + data.message : '');
+        }
+    } catch (e) {
+        dot.className = 'w-1.5 h-1.5 bg-slate-600 rounded-full';
+        dot.title = 'Status unknown';
     }
 }
 
