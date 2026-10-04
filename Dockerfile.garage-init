@@ -1,7 +1,7 @@
 # Tiny image that carries the Garage CLI (copied from the distroless
 # dxflrs/garage image, which has no shell) on top of Alpine so we can run the
 # bootstrap shell script (scripts/init_garage.sh) that calls `garage`.
-FROM dxflrs/garage:v1.3.1 AS garage
+FROM dxflrs/garage:v2.4.1 AS garage
 FROM alpine:3.24
 COPY --from=garage /garage /usr/local/bin/garage
 # busybox provides sh, sed, tr, sleep, seq
