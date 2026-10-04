@@ -1,0 +1,19 @@
+FROM python:3.14-slim
+
+WORKDIR /app
+
+# NFS client tooling so the in-container `nfs` storage plugin can mount/unmount
+# exports (mount, mountpoint, umount, mount.nfs). SMB and S3/Nextcloud need no
+# extra system packages (they use pure-Python libraries).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends nfs-common mount \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+EXPOSE 8008
+
+CMD ["python", "run.py"]

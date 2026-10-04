@@ -1,0 +1,19 @@
+# Garage (S3-compatible) config for the storage-plugin test harness.
+# Single-node cluster: one voter, quorum of one.
+# Garage v1.0 uses flat keys for rpc/web/consensus plus an [s3_api] table.
+metadata_dir = "/var/lib/garage/meta"
+data_dir = "/var/lib/garage/data"
+
+rpc_bind_addr = "[::]:3901"
+rpc_public_addr = "garage:3901"
+# Cluster secret (>= 32 chars). Test-only value.
+rpc_secret = "507649a0c0571bc205505db46ce22d12f7a833f3edb0fd7cee517daa045df63b"
+
+replication_factor = 1
+consistency_mode = "consistent"
+
+[s3_api]
+api_bind_addr = "[::]:3900"
+s3_region = "garage"
+
+web_bind_addr = "[::]:3902"
