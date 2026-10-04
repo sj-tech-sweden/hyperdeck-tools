@@ -1044,6 +1044,53 @@ function onStoragePluginTypeChanged() {
         `;
         fieldsContainer.appendChild(wrapper);
     });
+
+    if (storageType === 'sharepoint') {
+        const helper = document.createElement('div');
+        helper.innerHTML = `
+            <button type="button" onclick="listSharepointSites()" class="mt-2 text-[11px] bg-slate-800 text-slate-300 border border-slate-700 rounded px-2.5 py-1.5 hover:bg-slate-700 hover:text-white transition cursor-pointer">List available sites</button>
+            <div id="sd-sharepoint-sites" class="mt-2 space-y-1"></div>
+        `;
+        fieldsContainer.appendChild(helper);
+    }
+}
+
+async function listSharepointSites() {
+    const container = document.getElementById('sd-sharepoint-sites');
+    if (!container) return;
+    const config = collectStorageConfigFields();
+    container.innerHTML = '<div class="text-[10px] text-slate-500">Loading sites…</div>';
+    try {
+        const res = await fetch((HD_API_BASE || '') + '/api/storage/sharepoint/sites', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ config }),
+        });
+        const data = await res.json();
+        if (!data.ok) {
+            container.innerHTML = `<div class="text-[10px] text-rose-400">${escHtml(data.error || 'Failed to list sites')}</div>`;
+            return;
+        }
+        if (!data.sites || data.sites.length === 0) {
+            container.innerHTML = '<div class="text-[10px] text-slate-500">No sites returned for this tenancy.</div>';
+            return;
+        }
+        container.innerHTML = data.sites.map(s => `
+            <button type="button" onclick="selectSharepointSite('${escAttr(s.site_url)}')" class="block w-full text-left text-[10px] text-slate-300 hover:text-white bg-slate-900 border border-slate-800 rounded px-2 py-1">
+                <span class="font-medium">${escHtml(s.displayName || s.hostname || 'Site')}</span>
+                <span class="text-slate-500"> — ${escHtml(s.site_url)}</span>
+            </button>
+        `).join('');
+    } catch (e) {
+        container.innerHTML = '<div class="text-[10px] text-rose-400">Request failed.</div>';
+    }
+}
+
+function selectSharepointSite(siteUrl) {
+    const input = document.getElementById('sd-field-site_url');
+    if (input) input.value = siteUrl;
+    const container = document.getElementById('sd-sharepoint-sites');
+    if (container) container.innerHTML = `<div class="text-[10px] text-emerald-400">Selected: ${escHtml(siteUrl)}</div>`;
 }
 
 async function testStorageConnection() {

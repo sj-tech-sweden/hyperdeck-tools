@@ -103,6 +103,37 @@ def _get_drive_base_url(config: dict) -> str:
         return "https://graph.microsoft.com/v1.0/me/drive/root"
 
 
+def _list_sites(token: str) -> list[dict]:
+    """Return all sites visible to the token, with their SharePoint hostnames.
+
+    Used to help the user discover the correct ``site_url`` — Graph rejects a
+    host that does not belong to the token's tenancy with
+    "Invalid hostname for this tenancy".
+    """
+    import requests
+
+    sites: list[dict] = []
+    url = "https://graph.microsoft.com/v1.0/sites?search=*"
+    headers = {"Authorization": f"Bearer {token}"}
+    while url:
+        resp = requests.get(url, headers=headers, timeout=15)
+        if resp.status_code != 200:
+            msg = resp.json().get("error", {}).get("message", resp.text[:200])
+            raise RuntimeError(f"Failed to list sites: {msg}")
+        data = resp.json()
+        for site in data.get("value", []):
+            sc = site.get("siteCollection", {})
+            hostname = sc.get("hostname", "")
+            sites.append({
+                "hostname": hostname,
+                "webUrl": site.get("webUrl", ""),
+                "displayName": site.get("displayName", ""),
+                "site_url": f"https://{hostname}" if hostname else "",
+            })
+        url = data.get("@odata.nextLink")
+    return sites
+
+
 def send_file(local_path: str, remote_name: str, config: dict) -> bool:
     """Upload a file to the configured SharePoint/OneDrive drive."""
     if not os.path.exists(local_path):
@@ -175,7 +206,15 @@ def test_connection(config: dict) -> dict:
                 return {"ok": True, "message": f"Connected to SharePoint site: {name}"}
             else:
                 error = resp.json().get("error", {}).get("message", resp.text[:200])
-                return {"ok": False, "message": f"SharePoint error: {error}"}
+                extra = ""
+                try:
+                    discovered = _list_sites(token)
+                    hosts = sorted({s["site_url"] for s in discovered if s["site_url"]})
+                    if hosts:
+                        extra = " Valid site URLs in this tenancy: " + ", ".join(hosts)
+                except Exception:
+                    pass
+                return {"ok": False, "message": f"SharePoint error: {error}{extra}"}
         else:
             resp = requests.get(
                 "https://graph.microsoft.com/v1.0/me",
