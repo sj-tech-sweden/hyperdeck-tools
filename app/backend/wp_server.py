@@ -828,7 +828,7 @@ async def save_youtube_config(payload: dict[str, Any]):
 
 
 @app.get("/api/wp/plugins/keys/youtube/authorize")
-async def youtube_authorize(request):
+async def youtube_authorize(request: Request):
     """Generate Google OAuth2 authorization URL and return it."""
     data = _load_youtube_config()
     client_id = data.get("client_id", "")
