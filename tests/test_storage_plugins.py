@@ -1,5 +1,3 @@
-import os
-
 from app.backend.plugins.storage import nfs as nfs_plugin
 from app.backend.storage_plugin_manager import (
     StorageTransferQueue,
