@@ -11,6 +11,11 @@ folder browser can navigate it.
 `mount`/`umount` require root privileges. The backend therefore mounts via
 `sudo` whenever it is not already running as root.
 
+The Linux NFS userspace helper is also required. On Raspberry Pi OS / Debian,
+install it with `sudo apt install nfs-common`; `mount.nfs` is provided by that
+package. The repository updater installs `nfs-common` automatically when it is
+missing on Debian-based systems.
+
 ### Option A — keep the service as a limited user (recommended)
 
 Grant the service account passwordless sudo for just the mount binaries:

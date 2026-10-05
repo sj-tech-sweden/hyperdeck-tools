@@ -115,6 +115,19 @@ class TestStorageTransferQueue:
 
 
 class TestNfsMount:
+    def test_ensure_mounted_reports_missing_nfs_helper(self, monkeypatch):
+        monkeypatch.setattr(nfs_plugin, "_is_mounted", lambda p: False)
+        monkeypatch.setattr(nfs_plugin.os, "makedirs", lambda *a, **k: None)
+        monkeypatch.setattr(nfs_plugin.shutil, "which", lambda name: None)
+
+        try:
+            nfs_plugin.ensure_mounted(
+                {"server": "10.0.0.5", "share": "/export", "mount_point": "/mnt/foo"}
+            )
+            assert False, "expected RuntimeError"
+        except RuntimeError as exc:
+            assert "install nfs-common" in str(exc)
+
     def test_ensure_mounted_invokes_mount(self, monkeypatch):
         captured = {}
         state = {"mounted": False}
@@ -136,6 +149,7 @@ class TestNfsMount:
         monkeypatch.setattr(nfs_plugin, "_run", fake_run)
         monkeypatch.setattr(nfs_plugin, "_is_mounted", fake_ismount)
         monkeypatch.setattr(nfs_plugin.os, "makedirs", lambda *a, **k: None)
+        monkeypatch.setattr(nfs_plugin.shutil, "which", lambda name: "/sbin/mount.nfs")
         assert nfs_plugin.ensure_mounted(
             {"server": "10.0.0.5", "share": "/export", "mount_point": "/mnt/foo"}
         ) is True
@@ -154,6 +168,7 @@ class TestNfsMount:
         monkeypatch.setattr(nfs_plugin, "_run", fake_run)
         monkeypatch.setattr(nfs_plugin, "_is_mounted", lambda p: False)
         monkeypatch.setattr(nfs_plugin.os, "makedirs", lambda *a, **k: None)
+        monkeypatch.setattr(nfs_plugin.shutil, "which", lambda name: "/sbin/mount.nfs")
         try:
             nfs_plugin.ensure_mounted(
                 {"server": "10.0.0.5", "share": "/export", "mount_point": "/mnt/foo"}
