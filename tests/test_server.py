@@ -187,6 +187,25 @@ class TestNormalizeScheduleItem:
         result = normalize_schedule_item(raw, 0)
         assert result["slate_metadata"]["scene id"] == "OPN"
 
+    def test_web_presenter_fields_are_preserved(self):
+        raw = {
+            "id": "evt1",
+            "planned_title": "Test",
+            "protocol": "srt",
+            "quality": "Streaming High",
+            "video_mode": "1080p50",
+            "primary_url": "srt://encoder.example:9000",
+            "primary_key": "stream-secret",
+            "backup_url": "rtmp://backup.example/live",
+            "backup_key": "backup-secret",
+            "stream_profile": "Main Stream",
+            "platform": "youtube",
+        }
+        result = normalize_schedule_item(raw, 0)
+        assert {key: result[key] for key in raw if key not in {"id", "planned_title"}} == {
+            key: value for key, value in raw.items() if key not in {"id", "planned_title"}
+        }
+
 
 class TestNormalizeSchedulePayload:
     def test_empty_list(self):

@@ -591,6 +591,20 @@ def normalize_schedule_item(raw: dict[str, Any], index: int) -> dict[str, Any]:
     slate_metadata = sanitize_slate_settings(raw.get("slate_metadata", {}))
     if slate_metadata:
         normalized_item["slate_metadata"] = slate_metadata
+    for field in (
+        "protocol",
+        "quality",
+        "video_mode",
+        "primary_url",
+        "primary_key",
+        "backup_url",
+        "backup_key",
+        "stream_profile",
+        "platform",
+    ):
+        value = raw.get(field)
+        if isinstance(value, str):
+            normalized_item[field] = value
     return normalized_item
 
 def normalize_schedule_payload(data: list[dict[str, Any]]) -> list[dict[str, Any]]:
