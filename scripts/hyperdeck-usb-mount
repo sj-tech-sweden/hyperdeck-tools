@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+action="${1:-}"
+device_name="${2:-}"
+if [[ ! "$device_name" =~ ^[[:alnum:]_]+$ ]]; then
+  echo "Invalid block device name." >&2
+  exit 2
+fi
+
+device="/dev/$device_name"
+mount_root="/mnt/hyperdeck-usb"
+state_dir="/run/hyperdeck-usb-mount"
+marker="$state_dir/$device_name"
+
+log() {
+  logger -t hyperdeck-usb-mount -- "$*" || printf '%s\n' "$*" >&2
+}
+
+unmount_device() {
+  [ -f "$marker" ] || return 0
+  local mount_path
+  mount_path="$(<"$marker")"
+  case "$mount_path" in
+    "$mount_root"/*) ;;
+    *) log "Refusing unexpected mount path in $marker"; return 1 ;;
+  esac
+
+  if mountpoint -q "$mount_path"; then
+    if ! umount "$mount_path"; then
+      log "Could not unmount $mount_path cleanly; leaving it in place."
+      return 1
+    fi
+  fi
+  rm -f "$marker"
+  rmdir "$mount_path" 2>/dev/null || true
+}
+
+mount_device() {
+  [ -b "$device" ] || return 0
+  local fs_type uuid mount_id mount_path uid gid mount_options
+  fs_type="$(blkid -o value -s TYPE "$device" 2>/dev/null || true)"
+  uuid="$(blkid -o value -s UUID "$device" 2>/dev/null || true)"
+  if [ -z "$fs_type" ]; then
+    log "No supported filesystem detected on $device."
+    return 0
+  fi
+
+  case "$fs_type" in
+    vfat|fat|msdos|exfat|ntfs|ntfs3|ntfs-3g)
+      uid="${HYPERDECK_USB_UID:?Missing service UID}"
+      gid="${HYPERDECK_USB_GID:?Missing service GID}"
+      mount_options="uid=$uid,gid=$gid,umask=0007,nodev,nosuid,noexec"
+      ;;
+    ext2|ext3|ext4|xfs|btrfs|f2fs)
+      uid="${HYPERDECK_USB_UID:?Missing service UID}"
+      mount_options="rw,nodev,nosuid,noexec"
+      ;;
+    *)
+      log "Ignoring unsupported USB filesystem '$fs_type' on $device."
+      return 0
+      ;;
+  esac
+
+  if findmnt -rn -S "$device" >/dev/null 2>&1; then
+    log "$device is already mounted elsewhere; leaving it unchanged."
+    return 0
+  fi
+
+  mount_id="${uuid:-$device_name}"
+  mount_id="${mount_id//[^[:alnum:]_.-]/_}"
+  mount_path="$mount_root/$mount_id"
+  if mountpoint -q "$mount_path"; then
+    log "$mount_path is already mounted; leaving it unchanged."
+    return 0
+  fi
+  if [ -d "$mount_path" ] && [ -n "$(find "$mount_path" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
+    log "Refusing to mount over non-empty directory $mount_path."
+    return 1
+  fi
+
+  install -d -o root -g root -m 0755 "$mount_root" "$mount_path"
+  if ! mount -t "$fs_type" -o "$mount_options" "$device" "$mount_path"; then
+    log "Mount failed for $device ($fs_type)."
+    return 1
+  fi
+
+  install -d -m 0755 "$state_dir"
+  printf '%s\n' "$mount_path" > "$marker"
+
+  case "$fs_type" in
+    ext2|ext3|ext4|xfs|btrfs|f2fs)
+      if command -v setfacl >/dev/null 2>&1; then
+        setfacl -m "u:$uid:rwx" "$mount_path" \
+          && setfacl -d -m "u:$uid:rwx" "$mount_path" \
+          || log "Mounted $device, but could not grant an ACL on $mount_path."
+      else
+        log "Mounted $device, but setfacl is unavailable; existing POSIX permissions were not changed."
+      fi
+      ;;
+  esac
+  log "Mounted $device at $mount_path for the HyperDeck Tools service user."
+}
+
+case "$action" in
+  mount) mount_device ;;
+  unmount) unmount_device ;;
+  *) echo "Usage: $0 {mount|unmount} DEVICE_NAME" >&2; exit 2 ;;
+esac
