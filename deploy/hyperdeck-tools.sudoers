@@ -1,0 +1,15 @@
+# Allow the HyperDeck Tools service user to mount/unmount NFS shares.
+#
+# The NFS storage plugin mounts shares automatically (no manual `mount` needed),
+# but the `mount`/`umount` binaries require root. When the backend runs as a
+# non-root user (e.g. User=sj-tech in the systemd unit), it invokes them via
+# sudo. Install this file so those invocations don't prompt for a password:
+#
+#   sudo install -m 0440 deploy/hyperdeck-tools.sudoers /etc/sudoers.d/hyperdeck-tools
+#   sudo visudo -c   # validate
+#
+# Adjust the username if your service runs under a different account.
+#
+# Alternative: run the service as root (User=root in the unit). Then no sudoers
+# rule is needed, but the whole process runs with elevated privileges.
+sj-tech ALL=(root) NOPASSWD: /bin/mount, /bin/umount, /usr/bin/mount, /usr/bin/umount

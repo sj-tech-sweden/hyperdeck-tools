@@ -2239,6 +2239,7 @@ def _get_allowed_roots() -> list[str]:
         for base in ("/media", "/mnt", "/run/media"):
             if not os.path.isdir(base):
                 continue
+            roots.append(base)
             for entry in os.listdir(base):
                 full = os.path.join(base, entry)
                 if not os.path.isdir(full):
@@ -2261,7 +2262,46 @@ def _get_allowed_roots() -> list[str]:
                 roots.append(dest)
     except Exception:
         pass
-    return roots
+
+    # De-duplicate while preserving order.
+    seen: set[str] = set()
+    unique_roots: list[str] = []
+    for root in roots:
+        if root not in seen:
+            seen.add(root)
+            unique_roots.append(root)
+    return unique_roots
+
+
+def _ensure_nfs_mounted_for_path(target_path: str) -> None:
+    """Best-effort: mount any configured NFS destination that contains target_path.
+
+    Lets the folder browser reach NFS shares configured in the WebUI without the
+    user having to mount them manually first.
+    """
+    try:
+        from app.backend.plugins.storage.nfs import _is_mounted, ensure_mounted
+        from app.backend.storage_plugin_manager import load_storage_destinations
+    except Exception:
+        return
+
+    target_path = os.path.abspath(os.path.expanduser(target_path))
+    for dest in load_storage_destinations():
+        if dest.get("plugin_type") != "nfs":
+            continue
+        config = dest.get("config") or {}
+        mount_point = config.get("mount_point")
+        if not mount_point:
+            continue
+        mount_point = os.path.abspath(os.path.expanduser(mount_point))
+        if target_path != mount_point and not target_path.startswith(mount_point + os.sep):
+            continue
+        if _is_mounted(mount_point):
+            continue
+        try:
+            ensure_mounted(config)
+        except Exception as exc:  # pragma: no cover - depends on host mounts
+            logger.warning("Could not auto-mount NFS share at %s: %s", mount_point, exc)
 
 
 @app.get("/api/browse/roots")
@@ -2271,6 +2311,8 @@ async def get_browse_roots():
 @app.get("/api/browse")
 async def browse_host_folders(path: str = ""):
     target_path = os.path.abspath(os.path.expanduser(path)) if path else os.path.expanduser("~")
+
+    _ensure_nfs_mounted_for_path(target_path)
 
     allowed_roots = _get_allowed_roots()
     if not any(target_path == root or target_path.startswith(root + os.sep) for root in allowed_roots):

@@ -1,3 +1,4 @@
+from app.backend.plugins.storage import nfs as nfs_plugin
 from app.backend.storage_plugin_manager import (
     StorageTransferQueue,
     discover_storage_plugins,
@@ -111,3 +112,56 @@ class TestStorageTransferQueue:
         assert queue.max_concurrent == 5
         queue.max_concurrent = 0
         assert queue.max_concurrent == 1
+
+
+class TestNfsMount:
+    def test_ensure_mounted_invokes_mount(self, monkeypatch):
+        captured = {}
+        state = {"mounted": False}
+
+        def fake_ismount(p):
+            return state["mounted"]
+
+        def fake_run(cmd, timeout=30):
+            state["mounted"] = True
+            captured["cmd"] = list(cmd)
+
+            class R:
+                returncode = 0
+                stderr = ""
+                stdout = ""
+
+            return R()
+
+        monkeypatch.setattr(nfs_plugin, "_run", fake_run)
+        monkeypatch.setattr(nfs_plugin, "_is_mounted", fake_ismount)
+        monkeypatch.setattr(nfs_plugin.os, "makedirs", lambda *a, **k: None)
+        assert nfs_plugin.ensure_mounted(
+            {"server": "10.0.0.5", "share": "/export", "mount_point": "/mnt/foo"}
+        ) is True
+        assert "mount" in captured["cmd"]
+        assert "-t" in captured["cmd"] and "nfs" in captured["cmd"]
+
+    def test_ensure_mounted_raises_on_failure(self, monkeypatch):
+        def fake_run(cmd, timeout=30):
+            class R:
+                returncode = 32
+                stderr = "mount.nfs: access denied by server"
+                stdout = ""
+
+            return R()
+
+        monkeypatch.setattr(nfs_plugin, "_run", fake_run)
+        monkeypatch.setattr(nfs_plugin, "_is_mounted", lambda p: False)
+        monkeypatch.setattr(nfs_plugin.os, "makedirs", lambda *a, **k: None)
+        try:
+            nfs_plugin.ensure_mounted(
+                {"server": "10.0.0.5", "share": "/export", "mount_point": "/mnt/foo"}
+            )
+            assert False, "expected RuntimeError"
+        except RuntimeError as exc:
+            assert "access denied" in str(exc)
+
+    def test_ensure_unmounted_true_when_not_mounted(self, monkeypatch):
+        monkeypatch.setattr(nfs_plugin, "_is_mounted", lambda p: False)
+        assert nfs_plugin.ensure_unmounted("/mnt/foo") is True
