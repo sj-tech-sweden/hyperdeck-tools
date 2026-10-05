@@ -77,6 +77,12 @@ def ensure_mounted(config: dict) -> bool:
 
     os.makedirs(mount_point, exist_ok=True)
 
+    if shutil.which("mount.nfs") is None:
+        raise RuntimeError(
+            "NFS client helper 'mount.nfs' is missing; install nfs-common "
+            "(Debian/Raspberry Pi OS)."
+        )
+
     cmd = ["mount", "-t", "nfs"]
     if options:
         cmd.extend(["-o", options])

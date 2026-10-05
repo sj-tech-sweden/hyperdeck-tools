@@ -82,6 +82,34 @@ configure_mount_permissions() {
   info "Configured /mnt. The service restart after the update will apply the new group membership."
 }
 
+configure_nfs_client() {
+  [ "$(uname -s)" = "Linux" ] || return 0
+  if command -v mount.nfs >/dev/null 2>&1; then
+    info "NFS client helper is installed."
+    return 0
+  fi
+
+  if ! command -v apt-get >/dev/null 2>&1; then
+    warn "mount.nfs is missing; install the NFS client package for this Linux distribution."
+    return 1
+  fi
+  command -v sudo >/dev/null 2>&1 || {
+    warn "mount.nfs is missing and sudo is unavailable; install nfs-common to enable NFS mounts."
+    return 1
+  }
+
+  info "Installing nfs-common (provides mount.nfs)..."
+  sudo apt-get install -y nfs-common || {
+    warn "Could not install nfs-common; NFS mounting will continue to fail."
+    return 1
+  }
+  command -v mount.nfs >/dev/null 2>&1 || {
+    warn "nfs-common installed, but mount.nfs is still unavailable in PATH."
+    return 1
+  }
+  info "NFS client helper is ready."
+}
+
 configure_usb_automount() {
   [ "$(uname -s)" = "Linux" ] || return 0
   if [ ! -d /run/systemd/system ] || ! command -v udevadm >/dev/null 2>&1; then
@@ -302,6 +330,11 @@ if [ "$STASHED" -eq 1 ]; then
   if ! git stash pop; then
     warn "Stash conflict. Your changes are saved — run 'git stash list' to view, 'git stash pop' to retry."
   fi
+fi
+
+# --- Ensure the NFS mount helper is installed ---
+if ! configure_nfs_client; then
+  warn "NFS mounts may fail until the NFS client package is installed."
 fi
 
 # --- Configure USB auto-mount before restarting the application ---
