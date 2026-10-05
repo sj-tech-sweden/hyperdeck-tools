@@ -105,12 +105,18 @@ This will:
 - Pull the latest from the repository
 - Install/update Python requirements
 - Restore your stashed changes
+- On Linux with systemd, create the service if needed and restart it after the update
+- Install USB auto-mount rules for new supported USB volumes under `/mnt/hyperdeck-usb/<UUID>`
 
-Restart the service after updating if running as a systemd service:
+FAT-family and NTFS volumes are mounted for the service account. POSIX filesystems
+receive an access-control entry on the volume root only; existing files and
+directories are not recursively changed. Existing USB drives must be unplugged
+and reconnected after the first setup.
 
-```bash
-sudo systemctl restart hyperdeck-tools
-```
+USB volumes are mounted with `nodev`, `nosuid`, and `noexec`. Unsupported
+filesystems are ignored. A busy drive is not forcibly unmounted when disconnected.
+The updater may prompt for `sudo` when installing the system rules or restarting
+the service.
 
 ## Run as a systemd Service (Linux)
 
