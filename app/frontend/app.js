@@ -8,6 +8,8 @@ let scheduleDataCache = [];
 let currentPluginSelection = '';
 const PLUGIN_SELECTION_STORAGE_KEY = 'hyperdeck.schedulePluginSelection';
 let scheduleSaveDebounceTimer = null;
+let scheduleSaveInFlight = Promise.resolve(true);
+let scheduleDataLoaded = false;
 
 // --- Service Detection & API Bases ---
 const THIS_PORT = window.location.port;
@@ -493,6 +495,33 @@ function scheduleItemKey(item) {
     return `ts:${startTime}|${title}|${stage}`;
 }
 
+function scheduleApiUrls(tab = activeTab) {
+    return tab === 'webpresenter'
+        ? [() => wpFetch('/api/wp/schedule'), () => hdFetch('/api/schedule')]
+        : [() => hdFetch('/api/schedule'), () => wpFetch('/api/wp/schedule')];
+}
+
+async function requestScheduleApi(options = {}) {
+    let lastError = new Error('No schedule service is available.');
+    for (const request of scheduleApiUrls()) {
+        try {
+            const response = await request(options);
+            if (!response.ok) throw new Error(`Schedule API returned ${response.status}.`);
+            return response;
+        } catch (error) {
+            lastError = error;
+        }
+    }
+    throw lastError;
+}
+
+async function loadScheduleFromApi() {
+    const response = await requestScheduleApi();
+    const schedule = await response.json();
+    if (!Array.isArray(schedule)) throw new Error('Schedule API returned an invalid response.');
+    return schedule;
+}
+
 function isScheduleItemInScope(item) {
     const stage = normalizeStageName(item.stage).toLowerCase();
     const stageSet = configuredStageSet();
@@ -502,7 +531,8 @@ function isScheduleItemInScope(item) {
 
 function getVisibleScheduleRowsFromDOM() {
     const rows = [];
-    document.querySelectorAll('.schedule-row-item').forEach((el, idx) => {
+    const matrixId = activeTab === 'webpresenter' ? 'wp-schedule-matrix' : 'schedule-matrix-container';
+    document.querySelectorAll(`#${matrixId} .schedule-row-item`).forEach((el, idx) => {
         const id = el.querySelector('.sch-id')?.value.trim() || '';
         const plannedTitle = el.querySelector('.sch-title')?.value.trim() || '';
         const date = el.querySelector('.sch-date')?.value || '';
@@ -551,6 +581,7 @@ function getVisibleScheduleRowsFromDOM() {
             backup_url: backupUrl,
             backup_key: backupKey,
             stream_profile: streamProfile,
+            platform: el.dataset.platform || '',
         });
     });
     return rows;
@@ -577,6 +608,7 @@ function mergeVisibleRowsIntoCache() {
             backup_url: row.backup_url || '',
             backup_key: row.backup_key || '',
             stream_profile: row.stream_profile || '',
+            platform: row.platform || '',
         };
         const rowKey = row._key || row._row_key || scheduleItemKey(candidate);
         if (!rowKey) {
@@ -1564,6 +1596,7 @@ function createScheduleRowElement(item = { id: '', planned_title: '' }) {
     const isActive = item.id && item.id === globallyActiveEventId;
     div.className = `schedule-row-item rounded border px-2.5 py-2.5 ${isActive ? 'border-indigo-500/60 bg-indigo-500/10' : 'border-slate-800 bg-slate-900'}`;
     div.dataset.rowKey = rowKey;
+    div.dataset.platform = item.platform || '';
     div.draggable = true;
     div.innerHTML = `
         <div class="grid grid-cols-12 gap-2 items-end">
@@ -1817,20 +1850,29 @@ async function saveScheduleFromMatrix() {
                 backup_url: row.backup_url || '',
                 backup_key: row.backup_key || '',
                 stream_profile: row.stream_profile || '',
+                platform: row.platform || '',
             };
         })
         .filter(row => row.id || row.planned_title || row.start_time);
 
     scheduleDataCache = normalizedRows;
-    const payload = normalizedRows.map(({ id, planned_title, start_time, stage, slate_metadata }) => ({ id, planned_title, start_time, stage, slate_metadata }));
+    const payload = normalizedRows.map(({
+        id, planned_title, start_time, stage, slate_metadata, protocol, quality,
+        video_mode, primary_url, primary_key, backup_url, backup_key, stream_profile, platform,
+    }) => ({
+        id, planned_title, start_time, stage, slate_metadata, protocol, quality,
+        video_mode, primary_url, primary_key, backup_url, backup_key, stream_profile, platform,
+    }));
 
-    await hdFetch('/api/schedule', {
+    await requestScheduleApi({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
-    }).then(res => { if (!res.ok) throw new Error('Failed to save schedule'); });
+    });
+    scheduleDataLoaded = true;
 
-    renderScheduleMatrix(scheduleDataCache, true);
+    if (activeTab === 'webpresenter') wpFilterSchedule();
+    else renderScheduleMatrix(scheduleDataCache, true);
 
     if (!currentPluginSelection) {
         const descriptionEl = document.getElementById('plugin-description');
@@ -1848,34 +1890,28 @@ function requestScheduleSaveDebounced() {
 
     scheduleSaveDebounceTimer = setTimeout(async () => {
         scheduleSaveDebounceTimer = null;
-        try {
-            await saveScheduleFromMatrix();
-        } catch (e) {
+        scheduleSaveInFlight = saveScheduleFromMatrix().then(() => true).catch(() => {
             const syncStatus = document.getElementById('plugin-sync-status');
-            syncStatus.innerText = 'Schedule autosave failed. Use Save Schedule Changes.';
-        }
+            if (syncStatus) syncStatus.innerText = 'Schedule autosave failed. Use Save Schedule Changes.';
+            return false;
+        });
     }, 700);
 }
 
-let wpScheduleSaveDebounceTimer = null;
-
 function requestWpScheduleSaveDebounced() {
-    if (wpScheduleSaveDebounceTimer) {
-        clearTimeout(wpScheduleSaveDebounceTimer);
-    }
+    requestScheduleSaveDebounced();
+}
 
-    wpScheduleSaveDebounceTimer = setTimeout(async () => {
-        wpScheduleSaveDebounceTimer = null;
-        try {
-            mergeVisibleRowsIntoCache();
-            const url = hdApiUrl(`/api/schedule`);
-            await fetch(url, {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify(scheduleDataCache),
-            });
-        } catch (_) {}
-    }, 700);
+async function flushScheduleBeforeTabSwitch() {
+    await scheduleSaveInFlight;
+    for (;;) {
+        if (scheduleSaveDebounceTimer) clearTimeout(scheduleSaveDebounceTimer);
+        scheduleSaveDebounceTimer = null;
+        mergeVisibleRowsIntoCache();
+        scheduleSaveInFlight = saveScheduleFromMatrix().then(() => true).catch(() => false);
+        const saved = await scheduleSaveInFlight;
+        if (!scheduleSaveDebounceTimer) return saved;
+    }
 }
 
 function addManualScheduleRow() {
@@ -2074,11 +2110,12 @@ async function uploadScheduleFile() {
 
 async function clearScheduleForManualMode() {
     scheduleDataCache = [];
-    await hdFetch('/api/schedule', {
+    await requestScheduleApi({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify([])
-    }).then(res => { if (!res.ok) throw new Error('Failed to clear schedule'); });
+    });
+    scheduleDataLoaded = true;
     renderScheduleMatrix([]);
 }
 
@@ -4348,7 +4385,11 @@ document.addEventListener('drop', (e) => {
 
 // ==================== WEB PRESENTER FUNCTIONS ====================
 
-function switchAppTab(tab) {
+async function switchAppTab(tab) {
+    const tabChanged = tab !== activeTab;
+    let scheduleSaved = true;
+    if (tabChanged) scheduleSaved = await flushScheduleBeforeTabSwitch();
+
     activeTab = tab;
     localStorage.setItem('activeTab', tab);
     document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
@@ -4374,7 +4415,8 @@ function switchAppTab(tab) {
         loadWpPresenters();
         wpLoadActiveToForm();
         loadWpKeyPlugins();
-        loadWpSchedule();
+        if (scheduleSaved && (tabChanged || !scheduleDataLoaded)) await loadWpSchedule();
+        else wpFilterSchedule();
         loadWpProfiles();
         wpLoadPluginSelector();
         wpLoadApplyProfileSelect();
@@ -4395,6 +4437,8 @@ function switchAppTab(tab) {
         if (hdControls) { hdControls.classList.remove('hidden'); hdControls.classList.add('flex'); }
         if (wpControls) wpControls.classList.add('hidden');
         stopWpSse();
+        if (scheduleSaved && (tabChanged || !scheduleDataLoaded)) await loadHyperDeckSchedule();
+        else renderScheduleMatrix(scheduleDataCache, true);
     }
 }
 
@@ -5926,23 +5970,22 @@ function wpClearActiveEvent() {
 // --- WP Schedule (uses shared scheduleDataCache) ---
 
 async function loadWpSchedule() {
-    const url = hdApiUrl(`/api/schedule`);
     try {
-        const res = await fetch(url);
-        const data = await res.json();
-        scheduleDataCache = Array.isArray(data) ? data : [];
+        scheduleDataCache = await loadScheduleFromApi();
+        scheduleDataLoaded = true;
         wpFilterSchedule();
         wpUpdateStageSelectors();
     } catch (_) {
-        const wpUrl = wpApiUrl(`/api/wp/schedule`);
-        try {
-            const res = await fetch(wpUrl);
-            const data = await res.json();
-            scheduleDataCache = Array.isArray(data) ? data : [];
-            wpFilterSchedule();
-            wpUpdateStageSelectors();
-        } catch (_) {}
+        wpFilterSchedule();
     }
+}
+
+async function loadHyperDeckSchedule() {
+    try {
+        scheduleDataCache = await loadScheduleFromApi();
+        scheduleDataLoaded = true;
+    } catch (_) {}
+    renderScheduleMatrix(scheduleDataCache, true);
 }
 
 function wpUpdateStageSelectors() {
@@ -6091,28 +6134,17 @@ function wpAddEvent() {
 
 async function wpSaveSchedule() {
     mergeVisibleRowsIntoCache();
-    const url = hdApiUrl(`/api/schedule`);
     try {
-        await fetch(url, {
+        await requestScheduleApi({
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify(scheduleDataCache),
         });
+        scheduleDataLoaded = true;
         wpFilterSchedule();
         showToast('Schedule saved', 'success');
     } catch (_) {
-        const wpUrl = wpApiUrl(`/api/wp/schedule`);
-        try {
-            await fetch(wpUrl, {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify(scheduleDataCache),
-            });
-            wpFilterSchedule();
-            showToast('Schedule saved', 'success');
-        } catch (_) {
-            showToast('Failed to save schedule', 'error');
-        }
+        showToast('Failed to save schedule', 'error');
     }
 }
 
@@ -6328,6 +6360,10 @@ async function _detectServices() {
     } else {
         tabEl.style.display = '';
     }
+
+    if (activeTab === 'hyperdeck' && !servicesAvailable.hyperdeck) activeTab = 'webpresenter';
+    if (activeTab === 'webpresenter' && !servicesAvailable.webpresenter) activeTab = 'hyperdeck';
+    localStorage.setItem('activeTab', activeTab);
 
     // Set default tab and load its data
     switchAppTab(activeTab);
