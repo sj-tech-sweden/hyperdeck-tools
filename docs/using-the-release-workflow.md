@@ -1,20 +1,21 @@
 # Using the Release Workflow
 
-This document explains how to trigger releases, what gets built, and how to use the resulting artifacts.
+This document explains how releases are triggered, what gets built, and how to
+use the resulting artifacts.
 
 ## How It Works
 
-Releases are driven by **semantic version labels** on a merged PR (or a manual
-dispatch). The single **`release.yml`** workflow:
+Releases are automated with
+[`googleapis/release-please-action`](https://github.com/googleapis/release-please-action).
+There are two workflows:
 
-- computes the next version from the latest `v*` tag,
-- builds a changelog from the [Conventional Commits](https://www.conventionalcommits.org/)
-  since the previous tag (grouped into Features / Bug Fixes / Dependencies / Other,
-  matching the stockwire-rental style),
-- creates the GitHub Release with those notes, then
-- builds and attaches the three artifacts in the same run (chained via `needs`),
-  so the Docker image and binaries are produced reliably without depending on a
-  separate tag-push trigger:
+- **`release.yml`** runs on every push to `main`. It opens (and keeps up to date)
+  a **release PR** that bumps the version in `.release-please-manifest.json` and
+  rewrites the changelog (`RELEASES.md`) from the
+  [Conventional Commits](https://www.conventionalcommits.org/) since the last
+  release. Merging that PR publishes the GitHub Release and the `v*` tag.
+- **`build.yml`** runs when the release is published. It builds and attaches the
+  three artifacts:
 
 | Artifact | Platform | Format |
 | --- | --- | --- |
@@ -22,31 +23,34 @@ dispatch). The single **`release.yml`** workflow:
 | Standalone binary | macOS (Apple Silicon) | `.zip` archive (`hyperdeck-tools-macos-<arch>.zip`) |
 | Standalone binary | Windows (x64) | Single `.exe` file |
 
+The version bump follows Conventional Commits: `fix` → patch, `feat` → minor,
+and a `BREAKING CHANGE` / `!` → major.
+
 ## Triggering a Release
 
-### 1. Label the PR (recommended)
+### 1. Merge Conventional-Commit PRs to `main`
 
-Add one of `major`, `minor`, or `patch` to the pull request you want to release.
-The highest-priority present label wins (`major` > `minor` > `patch`). The
-Release workflow computes the next version, creates the release, and builds the
-Docker image + binaries in the same run.
+No labels or manual dispatch are needed. As soon as commits land on `main`,
+release-please opens (or updates) the release PR. The proposed version reflects
+the commit types merged since the last release.
 
-### 2. Manual dispatch
+### 2. Review and merge the release PR
 
-Run the **Release** workflow manually from the Actions tab and choose a
-`release_type` (`major` / `minor` / `patch`).
+The release PR is titled like `chore(main): release vX.Y.Z` and contains the
+changelog diff. Merge it to publish the GitHub Release and tag, which in turn
+triggers `build.yml`.
 
 ### 3. What happens automatically
 
-1. **Release** — `release.yml` computes the next semver, builds a changelog from
-   the Conventional Commits since the last tag (grouped into Features / Bug Fixes /
-   Dependencies / Other, matching the stockwire-rental style), creates the GitHub
-   Release with those notes, then builds and attaches the artifacts:
+1. **Release PR** — `release.yml` opens/updates the release PR with the changelog
+   (`RELEASES.md`) and version bump derived from Conventional Commits.
+2. **Publish** — merging the release PR creates the GitHub Release + `v*` tag at
+   `https://github.com/sj-tech-sweden/hyperdeck-tools/releases/tag/vX.Y.Z`.
+3. **Build** — `build.yml` runs on the published release and attaches the
+   artifacts:
    - **Docker** — Builds a multi-arch image (`linux/amd64` + `linux/arm64`) and pushes it to GitHub Container Registry
    - **macOS** — Builds a standalone binary with PyInstaller and attaches it to the release
    - **Windows** — Builds a standalone `.exe` with PyInstaller and attaches it to the release
-
-A GitHub Release is created at `https://github.com/sj-tech-sweden/hyperdeck-tools/releases/tag/vX.Y.Z` with all three artifacts.
 
 ### 4. Verify the release
 

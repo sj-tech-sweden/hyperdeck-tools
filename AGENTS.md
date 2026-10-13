@@ -36,7 +36,7 @@ Good:
 ```
 feat(webpresenter): add editable device config popup
 fix(hyperdeck): correct protocol line terminator
-chore(release): adopt label-driven release workflow
+chore(release): adopt release-please workflow
 ```
 
 Bad:
@@ -68,29 +68,30 @@ chore/release-workflow
   the change there, and open a PR against `main` for review before it is merged.
 - Keep each PR focused on one logical change; the commit(s) on the branch must
   follow the Conventional Commits rules above.
-- Once a PR is merged, the release is cut from it (see Release process): label the
-  merged PR `major` / `minor` / `patch`, or run the Release workflow manually.
+- Once a PR is merged, the release is cut from it automatically (see Release
+  process). No labels or manual dispatch are needed.
 
 ## Release process
 
-Releases are driven by **semantic version labels** on a pull request
-(`major`, `minor`, `patch`) or manually via the Release workflow's
-`workflow_dispatch`.
+Releases are automated with
+[`googleapis/release-please-action`](https://github.com/googleapis/release-please-action).
+release-please watches `main` and opens (and keeps up to date) a **release PR**
+that bumps the version in `.release-please-manifest.json` and rewrites the
+changelog (`RELEASES.md`) from the Conventional Commits since the last release.
+The version bump follows Conventional Commits: `fix` → patch, `feat` → minor,
+and a `BREAKING CHANGE`/`!` → major.
 
-- Labeling a PR (or dispatching) runs `.github/workflows/release.yml`, which:
-  - determines the release type from the highest-priority present label
-    (major > minor > patch),
-  - computes the next semantic version from the latest `v*` git tag,
-  - creates an annotated GitHub Release whose notes are grouped by Conventional
-    Commit type (Features / Bug Fixes / Dependencies / Other), matching the
-    stockwire-rental release-note style.
-- Pushing the resulting tag triggers `.github/workflows/build.yml`, which builds
-  the Docker image and the macOS/Windows binaries and attaches them to the
+- `.github/workflows/release.yml` runs release-please on every push to `main` and
+  creates/updates the release PR. Merging that PR publishes the GitHub Release
+  and the `v*` tag (per `release-please-config.json`).
+- When the release is published, `.github/workflows/build.yml` builds the Docker
+  image (multi-arch) and the macOS/Windows binaries and attaches them to the
   release.
 
 See [docs/using-the-release-workflow.md](docs/using-the-release-workflow.md) for
-the step-by-step guide. To cut a release: label the merged (or merging) PR with
-`patch`/`minor`/`major`, or run the Release workflow manually.
+the step-by-step guide. To cut a release: just merge your Conventional-Commit PRs
+to `main`; merging the release-please release PR publishes the release and kicks
+off the asset build.
 
 ## General
 
