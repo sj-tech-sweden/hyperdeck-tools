@@ -26,6 +26,21 @@ There are two workflows:
 The version bump follows Conventional Commits: `fix` → patch, `feat` → minor,
 and a `BREAKING CHANGE` / `!` → major.
 
+## Required Secrets
+
+The repository's workflow token (`GITHUB_TOKEN`) is locked to read-only, so it
+cannot open pull requests or push to GitHub Container Registry. Both workflows
+therefore authenticate with a Personal Access Token stored as the
+`RELEASE_PLEASE_TOKEN` secret. Create a classic PAT with these scopes:
+
+- `repo` — to open the release PR and create/upload the GitHub Release
+- `write:packages` — to push the multi-arch image to GHCR
+
+(or an equivalent fine-grained PAT with read/write on Contents, Pull requests,
+and Packages). Add it at **Settings → Secrets and variables → Actions** as
+`RELEASE_PLEASE_TOKEN`. If the secret is missing, the workflows fall back to
+`GITHUB_TOKEN`, which will fail with a permissions error.
+
 ## Triggering a Release
 
 ### 1. Merge Conventional-Commit PRs to `main`

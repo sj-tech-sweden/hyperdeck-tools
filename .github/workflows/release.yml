@@ -4,20 +4,26 @@ name: Release
 # "release PR" on every push to main. Merging that PR publishes the GitHub
 # Release + `v*` tag. The actual Docker image and standalone binaries are built
 # by `.github/workflows/build.yml`, which runs when the release is published.
+#
+# NOTE: the repository's workflow token (GITHUB_TOKEN) is locked to read-only
+# ("Read repository contents and packages permissions"), so it cannot create
+# pull requests or push to GHCR. A Personal Access Token with `repo` (for the
+# release PR + GitHub Release) and `write:packages` (for GHCR) scopes must be
+# stored as the `RELEASE_PLEASE_TOKEN` secret and is used for all write actions.
 
 on:
   push:
     branches: [main]
 
-permissions:
-  contents: write
-  pull-requests: write
-
 jobs:
   release-please:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
       - uses: googleapis/release-please-action@v5
         with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json

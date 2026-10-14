@@ -32,7 +32,7 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
 
       - uses: docker/metadata-action@v6
         id: meta
@@ -81,6 +81,7 @@ jobs:
       - name: Upload to release
         uses: softprops/action-gh-release@v3
         with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
           tag_name: ${{ github.event.release.tag_name }}
           files: dist/hyperdeck-tools-macos-*.zip
 
@@ -106,5 +107,6 @@ jobs:
       - name: Upload to release
         uses: softprops/action-gh-release@v3
         with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
           tag_name: ${{ github.event.release.tag_name }}
           files: dist/hyperdeck-tools.exe
