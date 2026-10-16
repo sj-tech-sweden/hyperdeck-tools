@@ -1,5 +1,13 @@
 # Release Notes
 
+## [0.4.6](https://github.com/sj-tech-sweden/hyperdeck-tools/compare/v0.4.5...v0.4.6) (2026-10-16)
+
+
+### Bug Fixes
+
+* **release:** use RELEASE_PLEASE_TOKEN PAT for write actions ([7dfa6e8](https://github.com/sj-tech-sweden/hyperdeck-tools/commit/7dfa6e880421921eb079a7dc1041c2537240f837))
+* **release:** use RELEASE_PLEASE_TOKEN PAT for write actions ([16c3f85](https://github.com/sj-tech-sweden/hyperdeck-tools/commit/16c3f853b569b25116b0f46ca89a5c36f651787d))
+
 ## v0.4.0 — Web Presenter Control
 
 Adds a full Web Presenter control layer: device discovery, stream profiles with
